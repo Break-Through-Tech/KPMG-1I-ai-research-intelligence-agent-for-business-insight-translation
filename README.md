@@ -8,7 +8,7 @@
 
 | Name             | GitHub Handle | Contribution                                                             |
 |------------------|---------------|--------------------------------------------------------------------------|
-|                  | @jehunte      | Break Through Tech Coach                                                 |
+| Jenna Hunte      | @jehunte      | Break Through Tech Coach                                                 |
 |                  | @             |                                                                          |
 |                  | @             |                                                                          |
 |                  | @             |                                                                          |
