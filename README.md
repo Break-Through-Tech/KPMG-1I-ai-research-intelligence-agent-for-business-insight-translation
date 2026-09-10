@@ -10,8 +10,9 @@
 |------------------|---------------|--------------------------------------------------------------------------|
 | Jenna Hunte      | @jehunte      | Break Through Tech Coach                                                 |
 | Kevin Koss       | @             | KPMG Challenge Advisor                                                   |
+| Neha Ashwin      | @nehashwin    | Fellow                                                                   |
 | Amina El Guenuni | @aminaelguenuni| Fellow                                                                  |
-| Marvi Garg       | @marvigarg    | Fellow                                                                         |
+| Marvi Garg       | @marvigarg    | Fellow                                                                   |
 |                  | @             |                                                                          |
 
 ---
