@@ -10,7 +10,7 @@
 |------------------|---------------|--------------------------------------------------------------------------|
 | Jenna Hunte      | @jehunte      | Break Through Tech Coach                                                 |
 | Kevin Koss       | @             | KPMG Challenge Advisor                                                   |
-|                  | @             |                                                                          |
+| Amina El Guenuni | @aminaelguenuni| Fellow                                                                  |
 |                  | @             |                                                                          |
 |                  | @             |                                                                          |
 
