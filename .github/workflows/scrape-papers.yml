@@ -2,7 +2,7 @@ name: Scrape New arXiv Papers
 
 on:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 1 * * 2,4,6"  # 9:00 PM EDT Mon/Wed/Fri (update to "0 2 * * 2,4,6" after DST ends in Nov)
   workflow_dispatch:
 
 permissions:
