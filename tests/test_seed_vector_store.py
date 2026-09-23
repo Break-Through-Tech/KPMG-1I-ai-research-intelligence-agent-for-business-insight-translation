@@ -1,18 +1,24 @@
-client = get_client("./qdrant_data")
+from src.vector_store import get_client
 
-print("Total points:", client.count("papers", exact=True).count)
+def main(): 
+    client = get_client("./qdrant_data")
 
-points, _ = client.scroll(
-    collection_name="papers",
-    limit=100,
-    with_payload=True,
-    with_vectors=False,
-)
+    print("Total points:", client.count("papers", exact=True).count)
 
-for point in points:
-    print("\nID:", point.id)
-    print("Paper:", point.payload["paper_id"])
-    print("Chunk index:", point.payload["chunk_index"])
-    print("Text:", point.payload["chunk_text"])
+    points, _ = client.scroll(
+        collection_name="papers",
+        limit=100,
+        with_payload=True,
+        with_vectors=False,
+    )
 
-client.close()
+    for point in points:
+        print("\nID:", point.id)
+        print("Paper:", point.payload["paper_id"])
+        print("Chunk index:", point.payload["chunk_index"])
+        print("Text:", point.payload["chunk_text"])
+
+    client.close()
+
+if __name__ == "__main__":
+    main()
