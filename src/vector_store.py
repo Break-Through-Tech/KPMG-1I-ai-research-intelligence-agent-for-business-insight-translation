@@ -61,11 +61,11 @@ def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Ch
 def semantic_search(client: QdrantClient, query: str, top_k: int = 5) -> list[dict]:
     model = get_model()
     query_vector = model.encode(query).tolist()
-    results = client.search(
+    results = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
+        query=query_vector,
         limit=top_k,
-    )
+    ).points
     return [
         {
             "score": r.score,
@@ -89,11 +89,11 @@ def search_papers(client: QdrantClient, query: str, top_k_papers: int = 2, chunk
     model = get_model()
     query_vector = model.encode(query).tolist()
 
-    raw_hits = client.search(
+    raw_hits = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
+        query=query_vector,
         limit=chunk_pool,
-    )
+    ).points
 
     best_per_paper: dict[str, dict] = {}
     for hit in raw_hits:
