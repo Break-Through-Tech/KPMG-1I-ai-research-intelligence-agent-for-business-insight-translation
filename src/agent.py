@@ -1,12 +1,30 @@
-from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict
 
-def mock_llm(state: MessagesState):
-    return {"messages": [{"role": "ai", "content": "hello world"}]}
+class AgentState(TypedDict):
+    query: str
+    document_ids: list[str]
+    retrieved_chunks: list[dict]
 
-graph = StateGraph(MessagesState)
-graph.add_node(mock_llm)
-graph.add_edge(START, "mock_llm")
-graph.add_edge("mock_llm", END)
+def mock_retrieve(state: AgentState):
+    print({"Received query": state['query']})
+
+    return {
+        "document_ids": ["1", "2", "3"],
+        "retrieved_chunks": ["chunk1", "chunk2", "chunk3"]
+    }
+
+graph = StateGraph(AgentState)
+graph.add_node("retrieve", mock_retrieve)
+graph.add_edge(START, "retrieve")
+graph.add_edge("retrieve", END)
 graph = graph.compile()
 
-graph.invoke({"messages": [{"role": "user", "content": "hi!"}]})
+result = graph.invoke({
+    "query": "test query",
+    "document_ids": [],
+    "retrieved_chunks": []
+})
+
+print(result)
+print(graph.get_graph().draw_mermaid())
