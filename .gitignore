@@ -2,3 +2,5 @@ venv/
 .DS_Store
 .env
 __pycache__/
+__pycache__/
+qdrant_data/
