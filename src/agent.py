@@ -32,9 +32,21 @@ graph = graph.compile()
 
 result = graph.invoke({
     "query": "How can AI explain medical reports to patients?",
-    "document_ids": [],
-    "retrieved_chunks": []
+    
 })
 
-print(result["document_ids"])
-print(result["retrieved_chunks"])
+def run_agent(query: str) -> AgentState:
+    return graph.invoke({
+        "query": query,
+        "document_ids": [],
+        "retrieved_chunks": []
+    })
+
+if __name__ == "__main__":
+    query = input("Enter your research query: ").strip()
+
+    result = run_agent(query)
+
+    print("\nRelevant document IDs:")
+    for document_id in result["document_ids"]:
+        print(document_id)
