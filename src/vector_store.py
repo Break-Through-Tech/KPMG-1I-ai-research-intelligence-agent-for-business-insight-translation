@@ -2,7 +2,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 import uuid
 from src.schema import Paper, Chunk
-from src.embeddings import get_model, chunk_paper, embed_chunks, EMBEDDING_MODEL_NAME
+from src.embeddings import get_model, embed_chunks, EMBEDDING_MODEL_NAME
 
 COLLECTION_NAME = "papers"
 VECTOR_SIZE = 384  
@@ -26,7 +26,7 @@ def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Ch
     ensure_collection(client)
 
     text = paper.abstract  
-    raw_chunks = chunk_paper(text)
+    raw_chunks = [paper.abstract]
     vectors = embed_chunks(raw_chunks)
 
     chunks: list[Chunk] = []
