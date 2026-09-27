@@ -13,7 +13,7 @@
 | Neha Ashwin      | @nehashwin    | Fellow                                                                   |
 | Amina El Guenuni | @aminaelguenuni| Fellow                                                                  |
 | Marvi Garg       | @marvigarg    | Fellow                                                                   |
-|                  | @             |                                                                          |
+| Jenvi Patel      | @jenvip       | Fellow                                                                   |
 
 ---
 ## 🎯 **Project Highlights**
