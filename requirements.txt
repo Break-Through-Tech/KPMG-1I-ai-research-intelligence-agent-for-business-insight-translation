@@ -1,4 +1,6 @@
 pydantic
+boto3
+python-dotenv
 qdrant-client
 sentence-transformers
 
