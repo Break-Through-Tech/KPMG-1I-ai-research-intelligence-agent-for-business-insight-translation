@@ -14,6 +14,7 @@
 | Amina El Guenuni | @aminaelguenuni| Fellow                                                                  |
 | Marvi Garg       | @marvigarg    | Fellow                                                                   |
 | Jenvi Patel      | @jenvip       | Fellow                                                                   |
+| Shakila Jafari   | @Shakila-Jafari| Fellow                                                                   |
 
 ---
 ## 🎯 **Project Highlights**
