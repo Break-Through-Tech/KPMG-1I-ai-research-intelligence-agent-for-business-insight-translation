@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # required so the workflow can push commits back
+  contents: write
 
 jobs:
   scrape:
@@ -19,20 +19,29 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"   # arxiv package requires 3.10+
+          python-version: "3.10"
+          cache: pip
 
-      - name: Install only what this job needs
-        run: pip install arxiv
-
-      - name: Run scraper
+      - name: Install dependencies
         run: |
-          cd scripts
-          python scrape_papers.py
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
 
-      - name: Commit and push new papers
+      - name: Scrape and store papers (B2 + Qdrant)
+        env:
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+          B2_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
+          B2_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
+          B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: python -m scripts.scrape_papers
+
+      - name: Commit updated seen_papers.json
+        if: success() || failure()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/
-          git diff --staged --quiet || git commit -m "Auto-scrape: add new papers"
+          git add data/seen_papers.json
+          git diff --staged --quiet || git commit -m "Auto-scrape: update seen papers"
           git push
