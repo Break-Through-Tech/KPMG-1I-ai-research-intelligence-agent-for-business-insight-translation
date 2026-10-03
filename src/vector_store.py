@@ -48,7 +48,6 @@ def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Ch
     """
     ensure_collection(client)
 
-    text = paper.abstract  
     raw_chunks = [paper.abstract]
     vectors = embed_chunks(raw_chunks)
 
