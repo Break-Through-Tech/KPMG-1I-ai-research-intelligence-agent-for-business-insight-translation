@@ -4,3 +4,5 @@ venv/
 __pycache__/
 __pycache__/
 qdrant_data/
+# PDFs live in B2 now, never in git
+data/*.pdf
