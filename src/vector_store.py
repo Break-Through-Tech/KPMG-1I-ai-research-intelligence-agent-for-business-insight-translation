@@ -134,6 +134,7 @@ def search_papers(client: QdrantClient, query: str, top_k_papers: int = 2, chunk
                 "categories": hit.payload.get("categories", []),
                 "best_chunk_text": hit.payload["chunk_text"],
                 "chunk_index": hit.payload["chunk_index"],
+                "object_storage_key": hit.payload.get("object_storage_key"),
             }
 
     ranked_papers = sorted(best_per_paper.values(), key=lambda p: p["score"], reverse=True)
