@@ -24,17 +24,23 @@ class B2Storage:
         )
 
 
+    @staticmethod
+    def object_key(paper_id):
+        """Object ID for a paper's PDF in the bucket, e.g. 'raw/2609.24974v1.pdf'."""
+        return f"raw/{paper_id}.pdf"
+
+
     def upload_pdf(self, pdf_path, paper_id):
-        object_key = f"raw/{paper_id}.pdf"
+        object_key = self.object_key(paper_id)
 
         self.client.upload_file(
             pdf_path,
             self.bucket_name,
             object_key,
+            ExtraArgs={"ContentType": "application/pdf"},
         )
 
         return object_key
-
 
     
     def pdf_exists(self, paper_id):
