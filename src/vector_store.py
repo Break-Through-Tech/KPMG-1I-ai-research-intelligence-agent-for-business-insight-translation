@@ -67,13 +67,18 @@ def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Ch
 
         points.append(
             PointStruct(
-                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id)),
+                id=chunk_point_id(chunk.chunk_id),
                 vector=vector,
                 payload={
                     **chunk.model_dump(mode="json"),
                     "title": paper.title,
                     "authors": paper.authors,
                     "categories": paper.categories,
+                    "abstract": paper.abstract,
+                    "publish_date": paper.publish_date.isoformat() if paper.publish_date else None,
+                    "pdf_url": str(paper.pdf_url) if paper.pdf_url else None,
+                    # where the PDF lives in B2, e.g. "raw/2609.24974v1.pdf"
+                    "object_storage_key": paper.object_storage_key,
                 },
             )
         )
