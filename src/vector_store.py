@@ -1,14 +1,37 @@
+import os
+import uuid
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-import uuid
 from src.schema import Paper, Chunk
 from src.embeddings import get_model, embed_chunks, EMBEDDING_MODEL_NAME
 
 COLLECTION_NAME = "papers"
-VECTOR_SIZE = 384  
+VECTOR_SIZE = 384
 
 def get_client(path: str = "./qdrant_data") -> QdrantClient:
+    """Use an online Qdrant if QDRANT_URL is set (needed for GitHub Actions),
+    otherwise the local qdrant_data/ folder."""
+    url = os.getenv("QDRANT_URL")
+    if url:
+        return QdrantClient(url=url, api_key=os.getenv("QDRANT_API_KEY"))
     return QdrantClient(path=path)
+
+
+def chunk_point_id(chunk_id: str) -> str:
+    """Same chunk always gets the same ID, so saving again overwrites instead of duplicating."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
+
+
+def paper_exists(client: QdrantClient, paper_id: str) -> bool:
+    ensure_collection(client)
+    found = client.retrieve(
+        collection_name=COLLECTION_NAME,
+        ids=[chunk_point_id(f"{paper_id}_chunk_0")],
+        with_payload=False,
+        with_vectors=False,
+    )
+    return len(found) > 0
 
 def ensure_collection(client: QdrantClient):
     if COLLECTION_NAME not in [c.name for c in client.get_collections().collections]:
