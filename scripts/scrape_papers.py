@@ -1,29 +1,15 @@
 import arxiv
 import os
-import json
 from urllib.request import urlretrieve
+from src.storage.b2_storage import B2Storage
 
 DATA_DIR = "../data"
-LOG_FILE = "../data/seen_papers.json"
 QUERY = "LLM routing"
 MAX_RESULTS = 20
 
-
-def load_seen_ids():
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE) as f:
-            return set(json.load(f))
-    return set()
-
-
-def save_seen_ids(seen_ids):
-    with open(LOG_FILE, "w") as f:
-        json.dump(list(seen_ids), f)
-
-
 def scrape_new_papers():
     os.makedirs(DATA_DIR, exist_ok=True)
-    seen_ids = load_seen_ids()
+    storage = B2Storage()
 
     client = arxiv.Client()
     search = arxiv.Search(
@@ -36,16 +22,19 @@ def scrape_new_papers():
     for paper in client.results(search):
         paper_id = paper.entry_id.split("/")[-1]
 
-        if paper_id in seen_ids:
-            break  # results are newest-first, so anything after this is old too
+        if storage.pdf_exists(paper_id):
+            print(f"Already stored: {paper_id}")
+            continue
 
         filename = f"{paper_id}.pdf"
-        urlretrieve(paper.pdf_url, os.path.join(DATA_DIR, filename))
-        seen_ids.add(paper_id)
+        local_path = os.path.join(DATA_DIR, filename)
+        
+        urlretrieve(paper.pdf_url, local_path)
+        storage.upload_pdf(local_path, paper_id)
+        
         new_count += 1
-        print(f"Downloaded: {filename}")
+        print(f"Downloaded and uploaded: {filename}")
 
-    save_seen_ids(seen_ids)
     print(f"Done. {new_count} new paper(s) added.")
 
 
