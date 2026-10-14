@@ -4,3 +4,5 @@ python-dotenv
 qdrant-client
 sentence-transformers
 langgraph
+langchain-ollama
+langchain-core
