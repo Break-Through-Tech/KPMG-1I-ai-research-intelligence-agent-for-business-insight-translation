@@ -4,10 +4,8 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from src.vector_store import get_client, semantic_search
 
-# 1. The LLM
 llm = ChatOllama(model="qwen2.5:7b", temperature=0)
 
-# 2. The prompt
 prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You are a research assistant that answers questions about AI papers. "
@@ -17,13 +15,11 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
-# 3. The state
 class AgentState(TypedDict):
     query: str
     retrieved_chunks: list[dict]
     answer: str
 
-# 4. Step one: find papers
 def retrieve_vectors(state: AgentState):
     client = get_client("./qdrant_data")
     try:
@@ -32,7 +28,6 @@ def retrieve_vectors(state: AgentState):
         client.close()
     return {"retrieved_chunks": results}
 
-# 5. Step two: ask Qwen
 def generate_answer(state: AgentState):
     context = ""
     for chunk in state["retrieved_chunks"]:
@@ -42,7 +37,6 @@ def generate_answer(state: AgentState):
     response = chain.invoke({"context": context, "question": state["query"]})
     return {"answer": response.content}
 
-# 6. Connect the steps
 graph = StateGraph(AgentState)
 graph.add_node("retrieve_vectors", retrieve_vectors)
 graph.add_node("generate_answer", generate_answer)
@@ -51,7 +45,6 @@ graph.add_edge("retrieve_vectors", "generate_answer")
 graph.add_edge("generate_answer", END)
 graph = graph.compile()
 
-# 7. Run it
 def run_agent(query: str) -> AgentState:
     return graph.invoke({"query": query, "retrieved_chunks": [], "answer": ""})
 
