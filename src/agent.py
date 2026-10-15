@@ -17,6 +17,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 class AgentState(TypedDict):
     query: str
+    document_ids: list[str]
     retrieved_chunks: list[dict]
     answer: str
 
@@ -26,7 +27,12 @@ def retrieve_vectors(state: AgentState):
         results = semantic_search(client, query=state["query"], top_k=3)
     finally:
         client.close()
-    return {"retrieved_chunks": results}
+    return {
+        "document_ids": [
+            result["paper_id"] for result in results
+        ],
+        "retrieved_chunks": results,
+    }
 
 def generate_answer(state: AgentState):
     context = ""
@@ -46,18 +52,25 @@ graph.add_edge("generate_answer", END)
 graph = graph.compile()
 
 def run_agent(query: str) -> AgentState:
-    return graph.invoke({"query": query, "retrieved_chunks": [], "answer": ""})
+    return graph.invoke({
+        "query": query,
+        "document_ids": [],
+        "retrieved_chunks": []
+    })
 
 if __name__ == "__main__":
     query = input("Enter your research query: ").strip()
+
     result = run_agent(query)
 
     print("\nAnswer:")
     print(result["answer"])
 
     print("\nRetrieved papers:")
-    for paper in result["retrieved_chunks"]:
-        print(f"\nTitle: {paper['title']}")
+    for rank, paper in enumerate(result["retrieved_chunks"], start=1):
+        preview = paper["chunk_text"][:100].replace("\n", " ")
+        print(f"\nRank: {rank}")
         print(f"Paper ID: {paper['paper_id']}")
-        print(f"Similarity: {paper['score']:.1%}")
-        print(f"Abstract: {paper['chunk_text'][:100]}...")
+        print(f"Title: {paper['title']}")
+        print(f"Cosine similarity: {paper['score']:.1%}")
+        print(f"Abstract preview: {preview}...")
