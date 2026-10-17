@@ -6,3 +6,5 @@ sentence-transformers
 langgraph
 langchain-ollama
 langchain-core
+requests
+beautifulsoup4
