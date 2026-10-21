@@ -3,10 +3,15 @@ from langgraph.graph import StateGraph, START, END
 from typing import TypedDict
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from src.arxiv_html import get_h2_sections
+from src.arxiv_html import fetch_sections
 from src.vector_store import get_client, semantic_search
 
-llm = ChatOllama(model="qwen2.5:7b", temperature=0)
+# Ollama's default context is much smaller than what qwen2.5 supports, and
+# anything past it is silently dropped.
+llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
+
+# Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
+MAX_SECTION_CHARS_PER_PAPER = 24_000
 
 prompt = ChatPromptTemplate.from_messages([
     ("system",
@@ -41,12 +46,22 @@ def retrieve_sections(state: AgentState):
     paper_sections = {}
     for arxiv_id in state["document_ids"]:
         try:
-            sections = get_h2_sections(arxiv_id)
+            sections = fetch_sections(arxiv_id)
         except requests.RequestException:
             continue
         if sections:
-            paper_sections[arxiv_id] = sections
+            paper_sections[arxiv_id] = [
+                {"title": section.title, "text": section.text} for section in sections
+            ]
     return {"paper_sections": paper_sections}
+
+def format_sections(sections: list[dict], budget: int = MAX_SECTION_CHARS_PER_PAPER) -> str:
+    text = ""
+    for section in sections:
+        text += f"{section['title']}\n{section['text']}\n"
+        if len(text) >= budget:
+            return text[:budget]
+    return text
 
 def generate_answer(state: AgentState):
     context = ""
@@ -54,8 +69,7 @@ def generate_answer(state: AgentState):
         paper_id = chunk["paper_id"]
         context += f"Title: {chunk['title']} (ID: {paper_id})\n"
         context += f"Abstract: {chunk['chunk_text']}\n"
-        for section in state["paper_sections"].get(paper_id, []):
-            context += f"{section['header']}\n{section['content']}\n"
+        context += format_sections(state["paper_sections"].get(paper_id, []))
         context += "\n"
 
     chain = prompt | llm

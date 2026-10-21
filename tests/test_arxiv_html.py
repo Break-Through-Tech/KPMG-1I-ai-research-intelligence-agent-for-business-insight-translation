@@ -1,68 +1,82 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import requests
 
-from src.agent import retrieve_sections
-from src.arxiv_html import get_h2_sections
+from src.agent import format_sections, retrieve_sections
+from src.arxiv_html import Section, parse_sections
 
+# A trimmed-down copy of what an arxiv.org/html/<id> page looks like.
 SAMPLE_HTML = """
-<html>
-<body>
-<h2>1 Introduction</h2>
-<p>Routing decides which model answers a query.</p>
-<p>We study cost and quality together.</p>
-<h2>2 Methods</h2>
-<div><p>We train a router on public benchmarks.</p></div>
-<h1>References</h1>
-<p>This reference text belongs to the next heading.</p>
-</body>
-</html>
+<html><body><article class="ltx_document">
+  <h1 class="ltx_title ltx_title_document">Pandora's AI Model Routing Box</h1>
+  <div class="ltx_abstract"><h6 class="ltx_title">Abstract</h6>
+    <p class="ltx_p">Routing requires estimating each specialist's value.</p></div>
+
+  <section class="ltx_section" id="S1">
+    <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">1 </span>Introduction</h2>
+    <div class="ltx_para"><p class="ltx_p">Heterogeneous AI systems route queries to specialists.</p></div>
+  </section>
+
+  <section class="ltx_section" id="S2">
+    <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">2 </span>Method</h2>
+    <div class="ltx_para"><p class="ltx_p">We model the cost as
+      <math alttext="c_{i}" display="inline"><semantics><msub><mi>c</mi><mi>i</mi></msub></semantics></math>
+      for each specialist.</p></div>
+    <figure class="ltx_table"><table><tr><td>99.9</td></tr></table>
+      <figcaption>Table 1: results</figcaption></figure>
+    <section class="ltx_subsection" id="S2.SS1">
+      <h3 class="ltx_title ltx_title_subsection">2.1 Gaussian signals</h3>
+      <div class="ltx_para"><p class="ltx_p">Under a Gaussian model we get closed forms.</p></div>
+    </section>
+  </section>
+
+  <section class="ltx_bibliography" id="bib">
+    <h2 class="ltx_title ltx_title_bibliography">References</h2>
+    <ul><li>[1] Some cited paper.</li></ul>
+  </section>
+</article></body></html>
 """
 
-NO_SECTIONS_HTML = "<html><body><p>No headings here.</p></body></html>"
+
+def test_one_section_per_h2_without_numbers():
+    assert [s.title for s in parse_sections(SAMPLE_HTML)] == ["Introduction", "Method"]
 
 
-def _response(text=None, error=None):
-    response = MagicMock()
-    if error:
-        response.raise_for_status.side_effect = error
-    else:
-        response.text = text
-        response.raise_for_status.return_value = None
-    return response
+def test_skips_references():
+    assert "References" not in [s.title for s in parse_sections(SAMPLE_HTML)]
 
 
-def test_get_h2_sections_returns_header_and_full_content():
-    with patch("src.arxiv_html.requests.get", return_value=_response(SAMPLE_HTML)) as get:
-        sections = get_h2_sections("2501.12345")
-
-    get.assert_called_once_with("https://arxiv.org/html/2501.12345", timeout=15)
-    assert sections == [
-        {
-            "header": "1 Introduction",
-            "content": "Routing decides which model answers a query. We study cost and quality together.",
-        },
-        {
-            "header": "2 Methods",
-            "content": "We train a router on public benchmarks.",
-        },
-    ]
+def test_section_text_includes_subsections():
+    method = parse_sections(SAMPLE_HTML)[1].text
+    assert "We model the cost as" in method
+    assert "Gaussian model" in method
 
 
-def test_retrieve_sections_skips_failed_and_empty_papers():
-    def fake_get(url, timeout=15):
-        arxiv_id = url.rsplit("/", 1)[-1]
+def test_math_becomes_latex_and_tables_are_dropped():
+    method = parse_sections(SAMPLE_HTML)[1].text
+    assert "c_{i}" in method
+    assert "99.9" not in method
+
+
+def test_retrieve_sections_skips_failed_and_missing_papers():
+    def fake_fetch(arxiv_id):
         if arxiv_id == "2501.00001":
-            return _response(error=requests.HTTPError("404"))
+            raise requests.HTTPError("503")
         if arxiv_id == "2501.00002":
-            return _response(NO_SECTIONS_HTML)
-        return _response(SAMPLE_HTML)
+            return None
+        return [Section("Introduction", "Routing decides which model answers.")]
 
-    state = {
-        "document_ids": ["2501.00001", "2501.00002", "2501.00003"],
-    }
-    with patch("src.arxiv_html.requests.get", side_effect=fake_get):
+    state = {"document_ids": ["2501.00001", "2501.00002", "2501.00003"]}
+    with patch("src.agent.fetch_sections", side_effect=fake_fetch):
         result = retrieve_sections(state)
 
-    assert list(result["paper_sections"]) == ["2501.00003"]
-    assert result["paper_sections"]["2501.00003"][0]["header"] == "1 Introduction"
+    assert result["paper_sections"] == {
+        "2501.00003": [{"title": "Introduction", "text": "Routing decides which model answers."}]
+    }
+
+
+def test_format_sections_stays_within_budget():
+    sections = [{"title": f"Section {i}", "text": "x" * 500} for i in range(10)]
+    text = format_sections(sections, budget=1200)
+    assert len(text) == 1200
+    assert text.startswith("Section 0\n")
