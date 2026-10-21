@@ -93,25 +93,24 @@ python3 -m tests.test_seed_vector_store
 python3 -m src.agent
 ```
 
-## Optional: download recent arXiv PDFs
+## Scrape new arXiv papers into the vector store
 
-The scraper is separate from the vector-store seed process. It downloads PDFs but does not add them to Qdrant.
-
-Install its additional dependency:
-
-```bash
-pip install arxiv
-```
-
-Run it from the `scripts` directory because its data paths are relative to that directory:
+The scraper finds new arXiv papers, opens each paper's HTML version
+(`arxiv.org/html/<arxiv_id>`), splits it into sections at every `<h2>` header,
+and stores the abstract plus every section in Qdrant. Each chunk is tagged with
+the paper's arXiv ID. If a paper has no HTML version, only its abstract is stored.
+No PDFs are downloaded.
 
 ```bash
-cd scripts
-python scrape_papers.py
-cd ..
+python3 -m scripts.scrape_papers      # new papers only; safe to re-run
+python3 -m scripts.backfill_papers    # one-off: store papers scraped before this change
+python3 -m unittest tests.test_scrape_papers -v
 ```
 
-Downloaded PDFs are placed in `data/`, and their IDs are recorded in `data/seen_papers.json`.
+Stored paper IDs are recorded in `data/seen_papers.json`. Leave `QDRANT_URL` empty
+locally to use `./qdrant_data`. The GitHub Action needs `QDRANT_URL` and
+`QDRANT_API_KEY` repository secrets (a hosted Qdrant), because the runner deletes
+its local files after every run.
 
 ## Local data
 
