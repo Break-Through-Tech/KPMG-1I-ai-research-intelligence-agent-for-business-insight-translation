@@ -14,15 +14,6 @@ llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
 # Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
 MAX_SECTION_CHARS_PER_PAPER = 24_000
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are a research assistant that answers questions about AI papers. "
-     "Use only the paper excerpts below. Cite the paper title for each claim. "
-     "If the answer isn't in the excerpts, say you don't know.\n\n"
-     "Papers:\n{context}"),
-    ("human", "{question}"),
-])
-
 class AgentState(TypedDict): #adding one field to the agent state for citation 
     query: str
     document_ids: list[str]
@@ -51,26 +42,23 @@ class LLMAnswer(BaseModel):
         description="The claims supporting the answer, with citations."
     )
 
-llm = ChatOllama(model="qwen2.5:7b", temperature=0)
-
-
 prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You are a research assistant answering questions about AI papers.\n\n"
-     "1. Use only the abstracts provided. Do not use outside knowledge.\n"
+     "1. Use only the excerpts provided. Do not use outside knowledge.\n"
      "2. First, identify what the question is asking for, such as a solution, "
      "a technique, a comparison, or an evaluation method.\n"
-     "3. Examine all the abstracts and select the findings that directly "
+     "3. Examine all the excerpts and select the findings that directly "
      "help answer the question. Do not rely only on the top-ranked paper.\n"
      "4. Explain what the findings suggest in response to the question. "
      "If the question asks how to solve a problem, describe the solutions "
-     "supported by the abstracts. Do not mistake methods for evaluating "
-     "a solution for the solution itself.\n"
+     "supported by the excerpts. Do not mistake methods for evaluating "
+     "a solution as the solution itself.\n"
      "5. Support each claim with the correct paper_id and a short, exact "
-     "quote from that paper's abstract.\n"
-     "6. If the abstracts do not describe a solution or provide enough "
+     "quote from that paper's excerpt.\n"
+     "6. If the excerpts do not describe a solution or provide enough "
      "evidence, clearly say what information is missing instead of guessing.\n\n"
-     "Abstracts:\n{context}"),
+     "Excerpts:\n{context}"),
     ("human", "{question}"),
 ])
 
@@ -117,13 +105,15 @@ def generate_answer(state: AgentState):
         context += format_sections(state["paper_sections"].get(paper_id, []))
         context += "\n"
 
-    structured_llm = llm.with_structured_output(LLMAnswer)
-    chain = prompt | structured_llm
+    inputs = {"context": context, "question": state["query"]}
 
-    result = chain.invoke({
-        "context": context,
-        "question": state["query"]
-    })
+    structured_llm = llm.with_structured_output(LLMAnswer, include_raw=True)
+    output = (prompt | structured_llm).invoke(inputs)
+    result = output["parsed"]
+
+    if result is None:
+        fallback = (prompt | llm).invoke(inputs)
+        return {"answer": fallback.content, "citations": []}
 
     answer = result.summary
     for claim in result.claims:
