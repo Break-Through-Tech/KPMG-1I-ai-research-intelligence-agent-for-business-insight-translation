@@ -45,11 +45,6 @@ class Paper(BaseModel):
     )
 
     
-    object_storage_key: Optional[str] = Field(
-        default=None,
-        description="Key/path to the stored PDF in object storage (R2/S3), set by #11/#15",
-    )
-  
     comments: Optional[str] = Field(
         default=None, description="Optional extra notes, e.g. '20 pages, 10 tables'"
     )
