@@ -1,6 +1,6 @@
 """
-One-off backfill: store every paper we've ALREADY scraped in the vector store,
-section by section.
+One-off backfill: store the abstract of every paper we've ALREADY scraped
+in the vector store.
 
 The old scraper only downloaded PDFs into data/ and listed their IDs in
 data/seen_papers.json, so the normal scraper skips them. This script takes
