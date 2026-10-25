@@ -5,6 +5,6 @@ sentence-transformers
 langgraph
 langchain-ollama
 langchain-core
-arxiv
 requests
 beautifulsoup4
+arxiv
