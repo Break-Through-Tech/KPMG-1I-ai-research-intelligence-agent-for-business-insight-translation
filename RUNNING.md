@@ -95,11 +95,9 @@ python3 -m src.agent
 
 ## Scrape new arXiv papers into the vector store
 
-The scraper finds new arXiv papers, opens each paper's HTML version
-(`arxiv.org/html/<arxiv_id>`), splits it into sections at every `<h2>` header,
-and stores the abstract plus every section in Qdrant. Each chunk is tagged with
-the paper's arXiv ID. If a paper has no HTML version, only its abstract is stored.
-No PDFs are downloaded.
+The scraper finds new arXiv papers and stores each paper's abstract in Qdrant,
+tagged with its arXiv ID. The agent fetches a paper's full sections from
+`arxiv.org/html/<arxiv_id>` only when it needs them. No PDFs are downloaded.
 
 ```bash
 python3 -m scripts.scrape_papers      # new papers only; safe to re-run
