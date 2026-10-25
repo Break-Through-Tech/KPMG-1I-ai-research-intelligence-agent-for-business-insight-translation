@@ -30,7 +30,6 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))  # so `src` imports work
 
-from src.arxiv_html import fetch_sections, split_long_text  # noqa: E402
 from src.schema import Paper  # noqa: E402
 
 DATA_DIR = ROOT_DIR / "data"
@@ -72,40 +71,16 @@ def build_paper(result):
         comments=getattr(result, "comment", None),
     )
 
-
-def build_chunks(paper, sections):
-    """(section_title, text) pairs to store: the abstract first, then each section.
-
-    Long sections are split into smaller pieces because the embedding model
-    only reads about the first 1000 characters of any text.
-    """
-    chunks = [("Abstract", paper.abstract)]
-    for section in sections or []:
-        for piece in split_long_text(section.text):
-            chunks.append((section.title, piece))
-    return chunks
-
-
-def ingest_paper(result, vector_client, fetch=fetch_sections, store=None, delete=None):
-    """Store one paper (abstract + sections) in Qdrant. Returns how many chunks were stored."""
-    if store is None or delete is None:
-        from src.vector_store import delete_paper, store_paper_chunks
-        store = store or store_paper_chunks
-        delete = delete or delete_paper
+def ingest_paper(result, vector_client, store=None):
+    """Store one paper's abstract in Qdrant. Returns the Paper."""
+    if store is None:
+        from src.vector_store import generate_and_store_embeddings
+        store = generate_and_store_embeddings
 
     paper = build_paper(result)
-    sections = fetch(paper.paper_id)
-    if sections is None:
-        print("  No HTML version on arXiv - storing the abstract only")
-    else:
-        print(f"  Found {len(sections)} section(s): {', '.join(s.title for s in sections)}")
-
-    chunks = build_chunks(paper, sections)
-    delete(vector_client, paper.paper_id)  # clear any half-saved chunks from an earlier failed run
-    store(vector_client, paper, chunks)
-    print(f"  Stored {len(chunks)} chunk(s) in the vector store")
-    return len(chunks)
-
+    store(vector_client, paper)
+    print("  Stored abstract in the vector store")
+    return paper
 
 def _default_vector_client():
     from src.vector_store import get_client
