@@ -1,21 +1,19 @@
 """
-Scrape new arXiv papers and store them in the vector store (Qdrant), section by section.
+Scrape new arXiv papers and store their abstracts in the vector store (Qdrant).
 
 For each new paper:
   1. Get its info from arXiv (title, authors, abstract...) using its arXiv ID.
-  2. Open the paper's HTML version (arxiv.org/html/<id>) and split it into
-     sections at every <h2> header (Introduction, Method, Results, ...).
-  3. Store the abstract + every section in Qdrant, each one tagged with the
-     arXiv ID so all pieces of a paper stay connected.
-     If arXiv has no HTML version, only the abstract is stored.
+  2. Embed the abstract and store it in Qdrant, tagged with the arXiv ID (paper_id).
 
+Only abstracts are stored. When the agent needs a paper's full sections, it
+fetches them from arxiv.org/html/<paper_id> at answer time (src/arxiv_html.py).
 No PDFs are downloaded or committed to GitHub.
 
 Rescraping is safe to run any number of times:
   - data/seen_papers.json skips papers we've already stored
   - a paper is only marked "seen" after it was saved successfully,
     so a paper that failed is retried on the next run
-  - chunk IDs are fixed per paper, so re-storing a paper never creates duplicates
+  - each paper's Qdrant ID is fixed, so storing it again never creates a duplicate
 
 Run from the repo root:
     python -m scripts.scrape_papers
