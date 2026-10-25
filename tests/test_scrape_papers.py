@@ -1,8 +1,10 @@
 """
-Tests for scraping arXiv papers into the vector store, section by section.
+Tests for scraping arXiv papers into the vector store (abstracts only).
 
-Runs offline: arXiv search results, the HTML download and the embedding model
-are faked. The vector-store tests use a real in-memory Qdrant.
+Runs offline: arXiv search results and the embedding model are faked.
+The vector-store tests use a real in-memory Qdrant.
+
+Section parsing is tested separately in tests/test_arxiv_html.py.
 
 Run from the repo root:
     python -m unittest tests.test_scrape_papers -v
@@ -16,40 +18,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import scripts.scrape_papers as scrape_papers
-from src.arxiv_html import Section, parse_sections, split_long_text
-
-
-# A trimmed-down copy of what an arxiv.org/html/<id> page looks like.
-SAMPLE_HTML = """
-<html><body><article class="ltx_document">
-  <h1 class="ltx_title ltx_title_document">Pandora's AI Model Routing Box</h1>
-  <div class="ltx_abstract"><h6 class="ltx_title">Abstract</h6>
-    <p class="ltx_p">Routing requires estimating each specialist's value.</p></div>
-
-  <section class="ltx_section" id="S1">
-    <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">1 </span>Introduction</h2>
-    <div class="ltx_para"><p class="ltx_p">Heterogeneous AI systems route queries to specialists.</p></div>
-  </section>
-
-  <section class="ltx_section" id="S2">
-    <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">2 </span>Method</h2>
-    <div class="ltx_para"><p class="ltx_p">We model the cost as
-      <math alttext="c_{i}" display="inline"><semantics><msub><mi>c</mi><mi>i</mi></msub></semantics></math>
-      for each specialist.</p></div>
-    <figure class="ltx_table"><table><tr><td>99.9</td></tr></table>
-      <figcaption>Table 1: results</figcaption></figure>
-    <section class="ltx_subsection" id="S2.SS1">
-      <h3 class="ltx_title ltx_title_subsection">2.1 Gaussian signals</h3>
-      <div class="ltx_para"><p class="ltx_p">Under a Gaussian model we get closed forms.</p></div>
-    </section>
-  </section>
-
-  <section class="ltx_bibliography" id="bib">
-    <h2 class="ltx_title ltx_title_bibliography">References</h2>
-    <ul><li>[1] Some cited paper.</li></ul>
-  </section>
-</article></body></html>
-"""
 
 
 class FakeAuthor:
@@ -72,60 +40,16 @@ class FakeResult:
 
 
 class FakeVectorStore:
-    """In-memory stand-in for Qdrant: {paper_id: [(section_title, text), ...]}"""
+    """In-memory stand-in for Qdrant: {paper_id: Paper}"""
 
     def __init__(self):
         self.papers = {}
         self.fail_for = set()
 
-    def store(self, client, paper, chunks):
+    def store(self, client, paper):
         if paper.paper_id in self.fail_for:
             raise ConnectionError("simulated Qdrant outage")
-        self.papers[paper.paper_id] = list(chunks)
-        self.last_paper = paper
-
-    def delete(self, client, paper_id):
-        self.papers.pop(paper_id, None)
-
-    def total_chunks(self):
-        return sum(len(c) for c in self.papers.values())
-
-
-def fake_fetch(arxiv_id):
-    if arxiv_id.endswith("nohtml"):
-        return None
-    return [Section("Introduction", f"Intro of {arxiv_id}."), Section("Method", f"Method of {arxiv_id}.")]
-
-
-# ---------- parsing the arXiv HTML ----------
-
-class TestParseSections(unittest.TestCase):
-
-    def setUp(self):
-        self.sections = parse_sections(SAMPLE_HTML)
-
-    def test_one_section_per_h2_without_numbers(self):
-        self.assertEqual([s.title for s in self.sections], ["Introduction", "Method"])
-
-    def test_skips_references(self):
-        self.assertNotIn("References", [s.title for s in self.sections])
-
-    def test_section_text_includes_subsections(self):
-        method = self.sections[1].text
-        self.assertIn("We model the cost as", method)
-        self.assertIn("Gaussian model", method)
-
-    def test_math_becomes_latex_and_tables_are_dropped(self):
-        method = self.sections[1].text
-        self.assertIn("c_{i}", method)
-        self.assertNotIn("99.9", method)
-
-    def test_split_long_text(self):
-        text = " ".join(f"Sentence number {i}." for i in range(200))
-        pieces = split_long_text(text, max_chars=300)
-        self.assertGreater(len(pieces), 1)
-        self.assertTrue(all(len(p) <= 300 for p in pieces))
-        self.assertEqual(" ".join(pieces), text)  # nothing lost
+        self.papers[paper.paper_id] = paper
 
 
 # ---------- scraping / rescraping ----------
@@ -146,43 +70,25 @@ class TestScraper(unittest.TestCase):
 
     def run_scraper(self, mock_client, ids):
         mock_client.return_value.results.return_value = [FakeResult(i) for i in ids]
-        return scrape_papers.scrape_new_papers(
-            vector_client=object(),
-            fetch=fake_fetch,
-            store=self.store.store,
-            delete=self.store.delete,
-        )
+        return scrape_papers.scrape_new_papers(vector_client=object(), store=self.store.store)
 
-    def test_stores_abstract_plus_sections(self, mock_client):
+    def test_stores_abstract_and_metadata(self, mock_client):
         self.run_scraper(mock_client, ["2610.00001v1"])
-        self.assertEqual(
-            self.store.papers["2610.00001v1"],
-            [
-                ("Abstract", "Abstract of 2610.00001v1."),
-                ("Introduction", "Intro of 2610.00001v1."),
-                ("Method", "Method of 2610.00001v1."),
-            ],
-        )
-
-    def test_metadata_is_kept(self, mock_client):
-        self.run_scraper(mock_client, ["2610.00001v1"])
-        paper = self.store.last_paper
-        self.assertEqual(paper.paper_id, "2610.00001v1")
+        paper = self.store.papers["2610.00001v1"]
+        self.assertEqual(paper.abstract, "Abstract of 2610.00001v1.")
         self.assertEqual(paper.title, "Title of 2610.00001v1")
         self.assertEqual(paper.authors, ["Ada Lovelace", "Alan Turing"])
-
-    def test_no_html_falls_back_to_abstract(self, mock_client):
-        self.run_scraper(mock_client, ["2610.00002nohtml"])
-        self.assertEqual(
-            self.store.papers["2610.00002nohtml"], [("Abstract", "Abstract of 2610.00002nohtml.")]
-        )
 
     def test_rescrape_adds_only_new_papers(self, mock_client):
         self.run_scraper(mock_client, ["2610.00001v1", "2610.00002v1"])
         new_count, _ = self.run_scraper(mock_client, ["2610.00003v1", "2610.00001v1", "2610.00002v1"])
         self.assertEqual(new_count, 1)
         self.assertEqual(len(self.store.papers), 3)
-        self.assertEqual(self.store.total_chunks(), 9)
+
+    def test_same_results_twice_is_a_no_op(self, mock_client):
+        self.run_scraper(mock_client, ["2610.00001v1", "2610.00002v1"])
+        new_count, _ = self.run_scraper(mock_client, ["2610.00001v1", "2610.00002v1"])
+        self.assertEqual(new_count, 0)
 
     def test_failed_paper_is_retried_next_run(self, mock_client):
         self.store.fail_for = {"2610.00002v1"}
@@ -222,21 +128,17 @@ class TestVectorStore(unittest.TestCase):
         points, _ = self.client.scroll(self.vs.COLLECTION_NAME, limit=1000, with_payload=True)
         return points
 
-    def test_chunks_are_tagged_with_paper_id_and_section(self):
-        self.vs.store_paper_chunks(
-            self.client, self.paper, [("Abstract", "Abs."), ("Introduction", "Intro.")]
-        )
-        payloads = sorted((p.payload["chunk_index"], p.payload["section_title"], p.payload["paper_id"])
-                          for p in self.all_points())
-        self.assertEqual(payloads, [(0, "Abstract", "2610.00001v1"), (1, "Introduction", "2610.00001v1")])
+    def test_abstract_is_tagged_with_paper_id(self):
+        self.vs.generate_and_store_embeddings(self.client, self.paper)
+        (point,) = self.all_points()
+        self.assertEqual(point.payload["paper_id"], "2610.00001v1")
+        self.assertEqual(point.payload["chunk_text"], "Abs.")
         self.assertTrue(self.vs.paper_exists(self.client, "2610.00001v1"))
 
-    def test_restoring_a_paper_does_not_duplicate(self):
-        chunks = [("Abstract", "Abs."), ("Introduction", "Intro."), ("Method", "M.")]
-        self.vs.store_paper_chunks(self.client, self.paper, chunks)
-        self.vs.delete_paper(self.client, self.paper.paper_id)
-        self.vs.store_paper_chunks(self.client, self.paper, chunks[:2])
-        self.assertEqual(len(self.all_points()), 2)
+    def test_storing_a_paper_twice_does_not_duplicate(self):
+        self.vs.generate_and_store_embeddings(self.client, self.paper)
+        self.vs.generate_and_store_embeddings(self.client, self.paper)
+        self.assertEqual(len(self.all_points()), 1)
 
 
 if __name__ == "__main__":
