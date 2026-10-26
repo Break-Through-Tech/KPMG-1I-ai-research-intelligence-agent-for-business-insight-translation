@@ -93,8 +93,9 @@ def _default_vector_client():
     return get_client(path=str(VECTOR_STORE_PATH))
 
 
-def scrape_new_papers(vector_client=None, **ingest_kwargs):
-    if vector_client is None:
+def scrape_new_papers(vector_client=None, record_only=False, **ingest_kwargs):
+    """record_only=True only adds new IDs to seen_papers.json, without touching Qdrant."""
+    if vector_client is None and not record_only:
         vector_client = _default_vector_client()
 
     seen_ids = load_seen_ids()
@@ -116,12 +117,13 @@ def scrape_new_papers(vector_client=None, **ingest_kwargs):
                 continue
 
             print(f"New paper: {paper_id} - {result.title.strip()}")
-            try:
-                ingest_paper(result, vector_client, **ingest_kwargs)
-            except Exception as e:
-                print(f"  FAILED {paper_id}: {e}")
-                failed.append(paper_id)
-                continue
+            if not record_only:
+                try:
+                    ingest_paper(result, vector_client, **ingest_kwargs)
+                except Exception as e:
+                    print(f"  FAILED {paper_id}: {e}")
+                    failed.append(paper_id)
+                    continue
 
             seen_ids.add(paper_id)  # only after it was saved successfully
             new_count += 1
@@ -138,5 +140,5 @@ def scrape_new_papers(vector_client=None, **ingest_kwargs):
 
 
 if __name__ == "__main__":
-    _, failed = scrape_new_papers()
+    _, failed = scrape_new_papers(record_only="--record-only" in sys.argv)
     sys.exit(1 if failed else 0)

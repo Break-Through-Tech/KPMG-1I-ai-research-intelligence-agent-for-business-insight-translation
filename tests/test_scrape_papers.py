@@ -105,6 +105,15 @@ class TestScraper(unittest.TestCase):
         self.run_scraper(mock_client, ["2610.00001v1"])
         self.assertEqual(list(self.data_dir.glob("*.pdf")), [])
 
+    def test_record_only_marks_seen_without_storing(self, mock_client):
+        mock_client.return_value.results.return_value = [FakeResult("2610.00001v1")]
+        with patch.object(scrape_papers, "_default_vector_client") as default_client:
+            new_count, failed = scrape_papers.scrape_new_papers(record_only=True, store=self.store.store)
+        default_client.assert_not_called()
+        self.assertEqual((new_count, failed), (1, []))
+        self.assertEqual(self.store.papers, {})
+        self.assertEqual(scrape_papers.load_seen_ids(), {"2610.00001v1"})
+
 
 # ---------- the real vector store (in-memory Qdrant) ----------
 

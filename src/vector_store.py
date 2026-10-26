@@ -103,7 +103,7 @@ def store_paper_chunks(
 
 
 def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Chunk]:
-    """Store just the paper's abstract as a single chunk (used by seed_vector_store.py)."""
+    """Store just the paper's abstract as a single chunk."""
     return store_paper_chunks(client, paper, [("Abstract", paper.abstract)])
 
 

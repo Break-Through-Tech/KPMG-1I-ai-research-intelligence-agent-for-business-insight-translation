@@ -23,16 +23,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          # CPU-only torch keeps the install small (sentence-transformers needs torch)
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
+        run: pip install arxiv pydantic
 
-      - name: Scrape papers into the vector store
-        env:
-          QDRANT_URL: ${{ secrets.QDRANT_URL }}
-          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
-        run: python -m scripts.scrape_papers
+      # Record-only: new IDs go into seen_papers.json; nothing is added to the vector store.
+      - name: Record new arXiv papers
+        run: python -m scripts.scrape_papers --record-only
 
       # Runs even if some papers failed, so the ones that succeeded are recorded.
       # Only the seen-papers log is committed - no PDFs.
