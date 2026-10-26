@@ -1,3 +1,5 @@
+import re
+import numpy as np
 import requests
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict
@@ -5,6 +7,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
 from src.vector_store import get_client, semantic_search
+from src.embeddings import get_model
 from pydantic import BaseModel, Field
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
@@ -62,12 +65,41 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
+
+def get_match_explanation(query: str, text: str) -> str:
+    """Return the abstract sentence most semantically similar to the query."""
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r'(?<=[.!?])\s+', text)
+        if len(sentence.strip()) > 30
+    ]
+
+    if not sentences:
+        return text[:200]
+
+    model = get_model()
+    query_vector = model.encode(query, normalize_embeddings=True)
+    sentence_vectors = model.encode(sentences, normalize_embeddings=True)
+    scores = sentence_vectors @ query_vector
+
+    best_index = int(np.argmax(scores))
+    return sentences[best_index]
+
+
 def retrieve_vectors(state: AgentState):
     client = get_client("./qdrant_data")
     try:
         results = semantic_search(client, query=state["query"], top_k=3)
     finally:
         client.close()
+
+    for result in results:
+        result["match_score"] = round(result["score"] * 100, 1)
+        result["match_explanation"] = get_match_explanation(
+            state["query"],
+            result["chunk_text"]
+        )
+
     return {
         "document_ids": [
             result["paper_id"] for result in results
@@ -169,5 +201,6 @@ if __name__ == "__main__":
         print(f"\nRank: {rank}")
         print(f"Paper ID: {paper['paper_id']}")
         print(f"Title: {paper['title']}")
-        print(f"Cosine similarity: {paper['score']:.1%}")
+        print(f"Match score: {paper['match_score']}")
+        print(f"Why this paper matched: {paper['match_explanation']}")
         print(f"Abstract preview: {preview}...")
