@@ -1,3 +1,5 @@
+import re
+import numpy as np
 import requests
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict
@@ -5,6 +7,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
 from src.vector_store import get_client, semantic_search
+from src.embeddings import get_model
 from pydantic import BaseModel, Field
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
@@ -41,6 +44,17 @@ class LLMAnswer(BaseModel):
     claims: list[Claim] = Field(
         description="The claims supporting the answer, with citations."
     )
+class PaperMatchExplanation(BaseModel):
+    paper_id: str = Field(
+        description="The exact paper_id."
+    )
+    explanation: str = Field(
+        description="One short plain-language sentence explaining why this paper is relevant to the user's question."
+    )
+
+
+class MatchExplanations(BaseModel):
+    explanations: list[PaperMatchExplanation]
 
 prompt = ChatPromptTemplate.from_messages([
     ("system",
@@ -62,17 +76,116 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
+match_explanation_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "Explain why each retrieved AI paper is relevant to the user's question.\n\n"
+        "Rules:\n"
+        "1. Use only the paper title and evidence provided.\n"
+        "2. Write one short, clear sentence for each paper.\n"
+        "3. Explain the connection to the user's question in plain language.\n"
+        "4. Do not simply repeat the evidence.\n"
+        "5. Do not add information that is not supported by the evidence.\n"
+        "6. Keep the exact paper_id for each explanation.\n\n"
+        "Retrieved papers:\n{papers}"
+    ),
+    ("human", "User question: {question}"),
+])
+
+def get_match_explanation(query: str, text: str) -> str:
+    """Return the abstract sentence most semantically similar to the query."""
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r'(?<=[.!?])\s+', text)
+        if len(sentence.strip()) > 30
+    ]
+
+    if not sentences:
+        return text[:200]
+
+    model = get_model()
+    query_vector = model.encode(query, normalize_embeddings=True)
+    sentence_vectors = model.encode(sentences, normalize_embeddings=True)
+    scores = sentence_vectors @ query_vector
+
+    best_index = int(np.argmax(scores))
+    return sentences[best_index]
+
+
 def retrieve_vectors(state: AgentState):
     client = get_client("./qdrant_data")
     try:
         results = semantic_search(client, query=state["query"], top_k=3)
     finally:
         client.close()
+
+    for result in results:
+        result["match_score"] = round(result["score"] * 100, 1)
+        result["match_explanation"] = get_match_explanation(
+            state["query"],
+            result["chunk_text"]
+        )
+
     return {
         "document_ids": [
             result["paper_id"] for result in results
         ],
         "retrieved_chunks": results,
+    }
+
+def explain_matches(state: AgentState):
+    papers = ""
+
+    for paper in state["retrieved_chunks"]:
+        papers += (
+            f"Paper ID: {paper['paper_id']}\n"
+            f"Title: {paper['title']}\n"
+            f"Evidence: {paper['match_explanation']}\n\n"
+        )
+
+    inputs = {
+        "question": state["query"],
+        "papers": papers,
+    }
+
+    structured_llm = llm.with_structured_output(
+        MatchExplanations,
+        include_raw=True
+    )
+
+    output = (
+        match_explanation_prompt | structured_llm
+    ).invoke(inputs)
+
+    result = output["parsed"]
+
+    if result is None:
+        for paper in state["retrieved_chunks"]:
+            paper["match_reason"] = (
+                "This paper was retrieved because it contains information "
+                "related to the user's question."
+            )
+
+        return {
+            "retrieved_chunks": state["retrieved_chunks"]
+        }
+
+    explanations_by_id = {
+        item.paper_id: item.explanation
+        for item in result.explanations
+    }
+
+    for paper in state["retrieved_chunks"]:
+        paper["match_reason"] = explanations_by_id.get(
+            paper["paper_id"],
+            (
+                "This paper was retrieved because it contains information "
+                "related to the user's question."
+            )
+        )
+
+    return {
+        "retrieved_chunks": state["retrieved_chunks"]
     }
 
 def retrieve_sections(state: AgentState):
@@ -132,10 +245,12 @@ def generate_answer(state: AgentState):
 
 graph = StateGraph(AgentState)
 graph.add_node("retrieve_vectors", retrieve_vectors)
+graph.add_node("explain_matches", explain_matches)
 graph.add_node("retrieve_sections", retrieve_sections)
 graph.add_node("generate_answer", generate_answer)
 graph.add_edge(START, "retrieve_vectors")
-graph.add_edge("retrieve_vectors", "retrieve_sections")
+graph.add_edge("retrieve_vectors", "explain_matches")
+graph.add_edge("explain_matches", "retrieve_sections")
 graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
 graph = graph.compile()
@@ -169,5 +284,7 @@ if __name__ == "__main__":
         print(f"\nRank: {rank}")
         print(f"Paper ID: {paper['paper_id']}")
         print(f"Title: {paper['title']}")
-        print(f"Cosine similarity: {paper['score']:.1%}")
+        print(f"Match score: {paper['match_score']}")
+        print(f"Why this paper matched: {paper['match_reason']}")
+        print(f"Evidence: {paper['match_explanation']}")
         print(f"Abstract preview: {preview}...")
