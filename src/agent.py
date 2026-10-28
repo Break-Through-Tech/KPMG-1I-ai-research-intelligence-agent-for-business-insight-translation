@@ -6,6 +6,7 @@ from typing import TypedDict
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
+from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
 from src.embeddings import get_model
 from pydantic import BaseModel, Field
@@ -16,6 +17,13 @@ llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
 
 # Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
 MAX_SECTION_CHARS_PER_PAPER = 24_000
+# So one long section can't use up a paper's whole budget.
+MAX_CHARS_PER_SECTION = MAX_SECTION_CHARS_PER_PAPER // 3
+
+CONCLUSION_TITLE = re.compile(r"conclu", re.IGNORECASE)
+# all-MiniLM-L6-v2 only reads about the first 1000 characters of a text.
+PIECE_CHARS = 1000
+MAX_PIECES_PER_SECTION = 20
 
 class AgentState(TypedDict): #adding one field to the agent state for citation 
     query: str
@@ -201,13 +209,41 @@ def retrieve_sections(state: AgentState):
             ]
     return {"paper_sections": paper_sections}
 
-def format_sections(sections: list[dict], budget: int = MAX_SECTION_CHARS_PER_PAPER) -> str:
-    text = ""
-    for section in sections:
-        text += f"{section['title']}\n{section['text']}\n"
-        if len(text) >= budget:
-            return text[:budget]
-    return text
+def _embed(texts: list[str]):
+    return get_model().encode(texts, normalize_embeddings=True, show_progress_bar=False)
+
+def _score_sections(sections: list[dict], query: str) -> list[float]:
+    """How similar each section is to the query, judged by its best-matching piece."""
+    pieces, owners = [], []
+    for i, section in enumerate(sections):
+        text = f"{section['title']}\n{section['text']}"
+        for start in range(0, min(len(text), PIECE_CHARS * MAX_PIECES_PER_SECTION), PIECE_CHARS):
+            pieces.append(text[start:start + PIECE_CHARS])
+            owners.append(i)
+    vectors = _embed([query] + pieces)
+    scores = [-1.0] * len(sections)
+    for owner, score in zip(owners, vectors[1:] @ vectors[0]):
+        scores[owner] = max(scores[owner], float(score))
+    return scores
+
+def _format_sections(sections: list[dict], query: str, budget: int = MAX_SECTION_CHARS_PER_PAPER) -> str:
+    """The conclusion, then the sections most similar to the query, in paper order."""
+    if not sections:
+        return ""
+    scores = _score_sections(sections, query)
+    priority = sorted(
+        range(len(sections)),
+        key=lambda i: (not CONCLUSION_TITLE.search(sections[i]["title"]), -scores[i]),
+    )
+    chosen = {}
+    remaining = budget
+    for i in priority:
+        if remaining <= 0:
+            break
+        block = f"{sections[i]['title']}\n{sections[i]['text']}\n"
+        chosen[i] = block[:min(MAX_CHARS_PER_SECTION, remaining)]
+        remaining -= len(chosen[i])
+    return "".join(chosen[i] for i in sorted(chosen))
 
 def generate_answer(state: AgentState):
     context = ""
@@ -215,7 +251,7 @@ def generate_answer(state: AgentState):
         paper_id = chunk["paper_id"]
         context += f"Title: {chunk['title']} (ID: {paper_id})\n"
         context += f"Abstract: {chunk['chunk_text']}\n"
-        context += format_sections(state["paper_sections"].get(paper_id, []))
+        context += _format_sections(state["paper_sections"].get(paper_id, []), state["query"])
         context += "\n"
 
     inputs = {"context": context, "question": state["query"]}
