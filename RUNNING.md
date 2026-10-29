@@ -69,6 +69,40 @@ make test
 
 The tests run offline: arXiv, the embedding model, and Qdrant are faked or in memory.
 
+Timing information is printed separately from the answer. It includes embedding
+model initialization, query embedding, Qdrant retrieval, arXiv section fetching,
+Ollama generation, and total execution time when those stages run.
+
+To ask multiple questions in one Python process, use interactive mode:
+
+```bash
+make agent-interactive
+```
+
+Enter a blank query to exit. The embedding model and compiled graph are reused
+between questions. Ollama model residency can be configured with
+`OLLAMA_KEEP_ALIVE`; it defaults to `10m`:
+
+```bash
+OLLAMA_KEEP_ALIVE=30m make agent-interactive
+```
+
+To compare the first embedding call with a warm call in one process:
+
+```bash
+make benchmark
+```
+
+To include two full agent runs, including Ollama generation, use:
+
+```bash
+OLLAMA_KEEP_ALIVE=30m python3 -m scripts.benchmark_latency --agent
+```
+
+The benchmark reports measured timings as JSON. It does not modify Qdrant or
+regenerate stored paper embeddings. Full agent benchmarking requires the local
+Qdrant collection, Ollama, and the `qwen2.5:7b` model to be available.
+
 ## 5. Run commands without Make
 
 The Make targets are shortcuts for these commands:
@@ -76,6 +110,8 @@ The Make targets are shortcuts for these commands:
 ```bash
 ./venv/bin/python -m scripts.backfill_papers
 ./venv/bin/python -m src.agent
+./venv/bin/python -m src.agent --interactive
+./venv/bin/python -m scripts.benchmark_latency
 ./venv/bin/python -m pytest tests
 ```
 

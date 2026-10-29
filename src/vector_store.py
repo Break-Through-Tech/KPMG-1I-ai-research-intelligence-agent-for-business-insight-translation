@@ -1,3 +1,4 @@
+from time import perf_counter
 import os
 import uuid
 
@@ -57,7 +58,10 @@ def delete_paper(client: QdrantClient, paper_id: str):
 
 
 def store_paper_chunks(
-    client: QdrantClient, paper: Paper, sections: list[tuple[str, str]]
+    client: QdrantClient,
+    paper: Paper,
+    sections: list[tuple[str, str]],
+    timings: dict[str, float] | None = None,
 ) -> list[Chunk]:
     """Embed and store a paper as one chunk per (section_title, text) pair.
 
@@ -67,7 +71,10 @@ def store_paper_chunks(
     ensure_collection(client)
 
     texts = [text for _, text in sections]
-    vectors = embed_chunks(texts)
+    if timings is None:
+        vectors = embed_chunks(texts)
+    else:
+        vectors = embed_chunks(texts, timings)
 
     chunks: list[Chunk] = []
     points: list[PointStruct] = []
@@ -102,19 +109,36 @@ def store_paper_chunks(
     return chunks
 
 
-def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Chunk]:
+def generate_and_store_embeddings(
+    client: QdrantClient,
+    paper: Paper,
+    timings: dict[str, float] | None = None,
+) -> list[Chunk]:
     """Store just the paper's abstract as a single chunk."""
-    return store_paper_chunks(client, paper, [("Abstract", paper.abstract)])
+    return store_paper_chunks(client, paper, [("Abstract", paper.abstract)], timings=timings)
 
 
-def semantic_search(client: QdrantClient, query: str, top_k: int = 5) -> list[dict]:
-    model = get_model()
+def semantic_search(
+    client: QdrantClient,
+    query: str,
+    top_k: int = 5,
+    timings: dict[str, float] | None = None,
+) -> list[dict]:
+    model = get_model(timings)
+    started = perf_counter()
     query_vector = model.encode(query).tolist()
+    if timings is not None:
+        timings["query_embedding_seconds"] = perf_counter() - started
+
+    started = perf_counter()
     results = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
         limit=top_k,
     ).points
+    if timings is not None:
+        timings["qdrant_retrieval_seconds"] = perf_counter() - started
+
     return [
         {
             "score": r.score,

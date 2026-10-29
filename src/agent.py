@@ -1,3 +1,7 @@
+import argparse
+import os
+from time import perf_counter
+
 import re
 import numpy as np
 import requests
@@ -8,12 +12,23 @@ from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
 from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
-from src.embeddings import get_model
 from pydantic import BaseModel, Field
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
 # anything past it is silently dropped.
-llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "10m")
+
+
+def create_llm():
+    return ChatOllama(
+        model="qwen2.5:7b",
+        temperature=0,
+        num_ctx=32768,
+        keep_alive=OLLAMA_KEEP_ALIVE,
+    )
+
+
+llm = create_llm()
 
 # Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
 MAX_SECTION_CHARS_PER_PAPER = 24_000
@@ -32,6 +47,7 @@ class AgentState(TypedDict): #adding one field to the agent state for citation
     paper_sections: dict[str, list[dict]]
     answer: str
     citations: list[dict]
+    timings: dict[str, float]
 
 
 class Claim(BaseModel):#output structure 
@@ -121,9 +137,15 @@ def get_match_explanation(query: str, text: str) -> str:
 
 
 def retrieve_vectors(state: AgentState):
+    timings = state.get("timings")
     client = get_client("./qdrant_data")
     try:
-        results = semantic_search(client, query=state["query"], top_k=3)
+        results = semantic_search(
+            client,
+            query=state["query"],
+            top_k=3,
+            timings=timings,
+        )
     finally:
         client.close()
 
@@ -197,6 +219,7 @@ def explain_matches(state: AgentState):
     }
 
 def retrieve_sections(state: AgentState):
+    started = perf_counter()
     paper_sections = {}
     for arxiv_id in state["document_ids"]:
         try:
@@ -207,6 +230,9 @@ def retrieve_sections(state: AgentState):
             paper_sections[arxiv_id] = [
                 {"title": section.title, "text": section.text} for section in sections
             ]
+    timings = state.get("timings")
+    if timings is not None:
+        timings["arxiv_section_fetching_seconds"] = perf_counter() - started
     return {"paper_sections": paper_sections}
 
 def _embed(texts: list[str]):
@@ -246,6 +272,7 @@ def _format_sections(sections: list[dict], query: str, budget: int = MAX_SECTION
     return "".join(chosen[i] for i in sorted(chosen))
 
 def generate_answer(state: AgentState):
+    timings = state.get("timings")
     context = ""
     for chunk in state["retrieved_chunks"]:
         paper_id = chunk["paper_id"]
@@ -257,12 +284,18 @@ def generate_answer(state: AgentState):
     inputs = {"context": context, "question": state["query"]}
 
     structured_llm = llm.with_structured_output(LLMAnswer, include_raw=True)
+    started = perf_counter()
     output = (prompt | structured_llm).invoke(inputs)
     result = output["parsed"]
 
     if result is None:
         fallback = (prompt | llm).invoke(inputs)
+        if timings is not None:
+            timings["ollama_response_generation_seconds"] = perf_counter() - started
         return {"answer": fallback.content, "citations": []}
+
+    if timings is not None:
+        timings["ollama_response_generation_seconds"] = perf_counter() - started
 
     answer = result.summary
     for claim in result.claims:
@@ -292,26 +325,54 @@ graph.add_edge("generate_answer", END)
 graph = graph.compile()
 
 def run_agent(query: str) -> AgentState:
-    return graph.invoke({
+    timings = {}
+    started = perf_counter()
+    result = graph.invoke({
         "query": query,
         "document_ids": [],
         "retrieved_chunks": [],
         "paper_sections": {},
         "answer": "",
         "citations": [],
+        "timings": timings,
     })
+    result["timings"]["total_execution_seconds"] = perf_counter() - started
+    return result
 
-if __name__ == "__main__":
-    query = input("Enter your research query: ").strip()
 
-    result = run_agent(query)
-
+def print_result(result: AgentState) -> None:
     print("\nAnswer:")
     print(result["answer"])
+    print("\nTiming:")
+    for name, seconds in result["timings"].items():
+        print(f"- {name}: {seconds:.3f}s")
     print("\nSources:")
     for citation in result["citations"]:
         print(f"- Paper ID: {citation['paper_id']}")
         print(f'  Supporting quote: "{citation["supporting_quote"]}"')
+
+
+def run_interactive() -> None:
+    while True:
+        query = input("Enter your research query (blank to exit): ").strip()
+        if not query:
+            return
+        print_result(run_agent(query))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--interactive", action="store_true")
+    args = parser.parse_args()
+
+    if args.interactive:
+        run_interactive()
+        raise SystemExit
+
+    query = input("Enter your research query: ").strip()
+
+    result = run_agent(query)
+
+    print_result(result)
 
 
     print("\nRetrieved papers:")
