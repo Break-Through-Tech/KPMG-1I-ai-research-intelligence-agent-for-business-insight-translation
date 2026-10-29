@@ -23,16 +23,19 @@ def main():
     client = get_client(path=str(VECTOR_STORE_PATH))
 
     total_chunks = 0
+    timings = {}
 
     try:
         for paper in papers:
-            chunks = generate_and_store_embeddings(client, paper)
+            chunks = generate_and_store_embeddings(client, paper, timings)
             total_chunks += len(chunks)
             print(f"Stored {paper.paper_id}: {len(chunks)} chunk(s)")
     finally:
         client.close()
 
     print(f"Finished: stored {len(papers)} papers and {total_chunks} chunks")
+    for name, seconds in timings.items():
+        print(f"- {name}: {seconds:.3f}s")
 
 if __name__ == "__main__":
     main()

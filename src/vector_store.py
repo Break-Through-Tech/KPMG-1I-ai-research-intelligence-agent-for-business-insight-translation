@@ -1,3 +1,5 @@
+from time import perf_counter
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 import uuid
@@ -17,7 +19,11 @@ def ensure_collection(client: QdrantClient):
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
 
-def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Chunk]:
+def generate_and_store_embeddings(
+    client: QdrantClient,
+    paper: Paper,
+    timings: dict[str, float] | None = None,
+) -> list[Chunk]:
     """Chunk a paper's abstract (or full text), embed each chunk, and upsert into Qdrant.
 
     Returns the list of Chunk objects that were stored, so the caller can
@@ -27,7 +33,7 @@ def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Ch
 
     text = paper.abstract  
     raw_chunks = [paper.abstract]
-    vectors = embed_chunks(raw_chunks)
+    vectors = embed_chunks(raw_chunks, timings)
 
     chunks: list[Chunk] = []
     points: list[PointStruct] = []
@@ -58,14 +64,26 @@ def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Ch
     client.upsert(collection_name=COLLECTION_NAME, points=points)
     return chunks
 
-def semantic_search(client: QdrantClient, query: str, top_k: int = 5) -> list[dict]:
-    model = get_model()
+def semantic_search(
+    client: QdrantClient,
+    query: str,
+    top_k: int = 5,
+    timings: dict[str, float] | None = None,
+) -> list[dict]:
+    model = get_model(timings)
+    started = perf_counter()
     query_vector = model.encode(query).tolist()
+    if timings is not None:
+        timings["query_embedding_seconds"] = perf_counter() - started
+
+    started = perf_counter()
     results = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
         limit=top_k,
     ).points
+    if timings is not None:
+        timings["qdrant_retrieval_seconds"] = perf_counter() - started
     return [
         {
             "score": r.score,
