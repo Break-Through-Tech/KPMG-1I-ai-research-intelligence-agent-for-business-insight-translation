@@ -2,9 +2,10 @@
 Get a paper's text from arXiv's HTML version, split into its real sections.
 
 Most new arXiv papers have a web-page version at https://arxiv.org/html/<arxiv_id>.
-In that page every main section ("1 Introduction", "2 Related Work", ...) is
-marked with an <h2> header. We read the text under each <h2> and return it as
-one Section per header.
+In that page every main section ("1 Introduction", "2 Related Work", ...) is a
+<section class="ltx_section"> (appendices: "ltx_appendix"). Its heading is
+usually an <h2>, but papers split into parts push sections down to <h3>, so we
+go by the class and return one Section per top-level section.
 
 If arXiv has no HTML version for a paper, fetch_sections() returns None.
 """
@@ -25,13 +26,16 @@ REQUEST_DELAY_SECONDS = 3  # arXiv asks for ~1 request every 3 seconds
 # Sections that add noise instead of useful content.
 SKIP_SECTION_TITLES = {"references", "bibliography", "acknowledgments", "acknowledgements"}
 
+SECTION_CLASSES = ["ltx_section", "ltx_appendix"]
+HEADING_TAGS = ["h2", "h3", "h4", "h5", "h6"]
+
 _last_request_time = 0.0
 
 
 @dataclass
 class Section:
     title: str  # e.g. "Introduction"
-    text: str   # all the text under that <h2>
+    text: str   # all the text in that section, subsections included
 
 
 def fetch_html(arxiv_id: str) -> str | None:
@@ -58,42 +62,51 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _heading_title(h2) -> str:
+def _heading_title(heading) -> str:
     """'<h2><span class="ltx_tag">1 </span>Introduction</h2>' -> 'Introduction'"""
-    tag = h2.find(class_="ltx_tag")
+    tag = heading.find(class_="ltx_tag")
     if tag:
         tag.extract()  # drop the section number
-    return _clean(h2.get_text(" "))
+    return _clean(heading.get_text(" "))
+
+
+def _section_containers(soup) -> list:
+    sections = soup.find_all("section", class_=SECTION_CLASSES)
+    if sections:
+        return sections
+    # A few papers don't use these classes; fall back to the <section> around each <h2>.
+    return [h2.find_parent("section") for h2 in soup.find_all("h2") if h2.find_parent("section")]
 
 
 def parse_sections(html: str) -> list[Section]:
-    """Split an arXiv HTML page into sections, one per <h2> header."""
+    """Split an arXiv HTML page into its sections (subsections stay in their section)."""
     soup = BeautifulSoup(html, "html.parser")
 
     # Math is stored as MathML (lots of junk symbols); replace it with its LaTeX text.
     for math in soup.find_all("math"):
         math.replace_with(f" {math.get('alttext', '')} ")
 
-    # Figures, tables and equation blocks don't read well as plain text.
+    # Figures, tables and equation blocks don't read well as plain text. Broken
+    # conversions sometimes swallow later sections into a figure, so move those out first.
     for el in soup.select("figure, table, .ltx_equation, .ltx_equationgroup"):
+        if el.parent is None:
+            continue  # already removed with an enclosing figure
+        for section in reversed(el.find_all("section", class_=SECTION_CLASSES)):
+            el.insert_after(section.extract())
         el.decompose()
 
+    # Broken conversions sometimes nest sections inside each other. Going from the last
+    # section to the first and removing each one after reading it means a section's text
+    # never includes the sections nested inside it.
     sections: list[Section] = []
-    for h2 in soup.find_all("h2"):
-        title = _heading_title(h2)
-        if not title or title.lower() in SKIP_SECTION_TITLES:
-            continue
-
-        # The section's text is everything in its <section> except the <h2> itself.
-        container = h2.find_parent("section")
-        if container is None:
-            continue
-        h2.extract()
-        text = _clean(container.get_text(" "))
-        if text:
+    for container in reversed(_section_containers(soup)):
+        heading = container.find(HEADING_TAGS)
+        title = _heading_title(heading.extract()) if heading else ""
+        text = _clean(container.extract().get_text(" "))
+        if title and text and title.lower() not in SKIP_SECTION_TITLES:
             sections.append(Section(title=title, text=text))
 
-    return sections
+    return sections[::-1]
 
 
 def fetch_sections(arxiv_id: str) -> list[Section] | None:

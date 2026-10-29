@@ -2,12 +2,15 @@ import argparse
 import os
 from time import perf_counter
 
+import re
+import numpy as np
 import requests
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
+from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
 from pydantic import BaseModel, Field
 
@@ -29,6 +32,13 @@ llm = create_llm()
 
 # Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
 MAX_SECTION_CHARS_PER_PAPER = 24_000
+# So one long section can't use up a paper's whole budget.
+MAX_CHARS_PER_SECTION = MAX_SECTION_CHARS_PER_PAPER // 3
+
+CONCLUSION_TITLE = re.compile(r"conclu", re.IGNORECASE)
+# all-MiniLM-L6-v2 only reads about the first 1000 characters of a text.
+PIECE_CHARS = 1000
+MAX_PIECES_PER_SECTION = 20
 
 class AgentState(TypedDict): #adding one field to the agent state for citation 
     query: str
@@ -58,6 +68,17 @@ class LLMAnswer(BaseModel):
     claims: list[Claim] = Field(
         description="The claims supporting the answer, with citations."
     )
+class PaperMatchExplanation(BaseModel):
+    paper_id: str = Field(
+        description="The exact paper_id."
+    )
+    explanation: str = Field(
+        description="One short plain-language sentence explaining why this paper is relevant to the user's question."
+    )
+
+
+class MatchExplanations(BaseModel):
+    explanations: list[PaperMatchExplanation]
 
 prompt = ChatPromptTemplate.from_messages([
     ("system",
@@ -79,6 +100,42 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
+match_explanation_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "Explain why each retrieved AI paper is relevant to the user's question.\n\n"
+        "Rules:\n"
+        "1. Use only the paper title and evidence provided.\n"
+        "2. Write one short, clear sentence for each paper.\n"
+        "3. Explain the connection to the user's question in plain language.\n"
+        "4. Do not simply repeat the evidence.\n"
+        "5. Do not add information that is not supported by the evidence.\n"
+        "6. Keep the exact paper_id for each explanation.\n\n"
+        "Retrieved papers:\n{papers}"
+    ),
+    ("human", "User question: {question}"),
+])
+
+def get_match_explanation(query: str, text: str) -> str:
+    """Return the abstract sentence most semantically similar to the query."""
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r'(?<=[.!?])\s+', text)
+        if len(sentence.strip()) > 30
+    ]
+
+    if not sentences:
+        return text[:200]
+
+    model = get_model()
+    query_vector = model.encode(query, normalize_embeddings=True)
+    sentence_vectors = model.encode(sentences, normalize_embeddings=True)
+    scores = sentence_vectors @ query_vector
+
+    best_index = int(np.argmax(scores))
+    return sentences[best_index]
+
+
 def retrieve_vectors(state: AgentState):
     timings = state.get("timings")
     client = get_client("./qdrant_data")
@@ -91,11 +148,74 @@ def retrieve_vectors(state: AgentState):
         )
     finally:
         client.close()
+
+    for result in results:
+        result["match_score"] = round(result["score"] * 100, 1)
+        result["match_explanation"] = get_match_explanation(
+            state["query"],
+            result["chunk_text"]
+        )
+
     return {
         "document_ids": [
             result["paper_id"] for result in results
         ],
         "retrieved_chunks": results,
+    }
+
+def explain_matches(state: AgentState):
+    papers = ""
+
+    for paper in state["retrieved_chunks"]:
+        papers += (
+            f"Paper ID: {paper['paper_id']}\n"
+            f"Title: {paper['title']}\n"
+            f"Evidence: {paper['match_explanation']}\n\n"
+        )
+
+    inputs = {
+        "question": state["query"],
+        "papers": papers,
+    }
+
+    structured_llm = llm.with_structured_output(
+        MatchExplanations,
+        include_raw=True
+    )
+
+    output = (
+        match_explanation_prompt | structured_llm
+    ).invoke(inputs)
+
+    result = output["parsed"]
+
+    if result is None:
+        for paper in state["retrieved_chunks"]:
+            paper["match_reason"] = (
+                "This paper was retrieved because it contains information "
+                "related to the user's question."
+            )
+
+        return {
+            "retrieved_chunks": state["retrieved_chunks"]
+        }
+
+    explanations_by_id = {
+        item.paper_id: item.explanation
+        for item in result.explanations
+    }
+
+    for paper in state["retrieved_chunks"]:
+        paper["match_reason"] = explanations_by_id.get(
+            paper["paper_id"],
+            (
+                "This paper was retrieved because it contains information "
+                "related to the user's question."
+            )
+        )
+
+    return {
+        "retrieved_chunks": state["retrieved_chunks"]
     }
 
 def retrieve_sections(state: AgentState):
@@ -115,13 +235,41 @@ def retrieve_sections(state: AgentState):
         timings["arxiv_section_fetching_seconds"] = perf_counter() - started
     return {"paper_sections": paper_sections}
 
-def format_sections(sections: list[dict], budget: int = MAX_SECTION_CHARS_PER_PAPER) -> str:
-    text = ""
-    for section in sections:
-        text += f"{section['title']}\n{section['text']}\n"
-        if len(text) >= budget:
-            return text[:budget]
-    return text
+def _embed(texts: list[str]):
+    return get_model().encode(texts, normalize_embeddings=True, show_progress_bar=False)
+
+def _score_sections(sections: list[dict], query: str) -> list[float]:
+    """How similar each section is to the query, judged by its best-matching piece."""
+    pieces, owners = [], []
+    for i, section in enumerate(sections):
+        text = f"{section['title']}\n{section['text']}"
+        for start in range(0, min(len(text), PIECE_CHARS * MAX_PIECES_PER_SECTION), PIECE_CHARS):
+            pieces.append(text[start:start + PIECE_CHARS])
+            owners.append(i)
+    vectors = _embed([query] + pieces)
+    scores = [-1.0] * len(sections)
+    for owner, score in zip(owners, vectors[1:] @ vectors[0]):
+        scores[owner] = max(scores[owner], float(score))
+    return scores
+
+def _format_sections(sections: list[dict], query: str, budget: int = MAX_SECTION_CHARS_PER_PAPER) -> str:
+    """The conclusion, then the sections most similar to the query, in paper order."""
+    if not sections:
+        return ""
+    scores = _score_sections(sections, query)
+    priority = sorted(
+        range(len(sections)),
+        key=lambda i: (not CONCLUSION_TITLE.search(sections[i]["title"]), -scores[i]),
+    )
+    chosen = {}
+    remaining = budget
+    for i in priority:
+        if remaining <= 0:
+            break
+        block = f"{sections[i]['title']}\n{sections[i]['text']}\n"
+        chosen[i] = block[:min(MAX_CHARS_PER_SECTION, remaining)]
+        remaining -= len(chosen[i])
+    return "".join(chosen[i] for i in sorted(chosen))
 
 def generate_answer(state: AgentState):
     timings = state.get("timings")
@@ -130,7 +278,7 @@ def generate_answer(state: AgentState):
         paper_id = chunk["paper_id"]
         context += f"Title: {chunk['title']} (ID: {paper_id})\n"
         context += f"Abstract: {chunk['chunk_text']}\n"
-        context += format_sections(state["paper_sections"].get(paper_id, []))
+        context += _format_sections(state["paper_sections"].get(paper_id, []), state["query"])
         context += "\n"
 
     inputs = {"context": context, "question": state["query"]}
@@ -166,10 +314,12 @@ def generate_answer(state: AgentState):
 
 graph = StateGraph(AgentState)
 graph.add_node("retrieve_vectors", retrieve_vectors)
+graph.add_node("explain_matches", explain_matches)
 graph.add_node("retrieve_sections", retrieve_sections)
 graph.add_node("generate_answer", generate_answer)
 graph.add_edge(START, "retrieve_vectors")
-graph.add_edge("retrieve_vectors", "retrieve_sections")
+graph.add_edge("retrieve_vectors", "explain_matches")
+graph.add_edge("explain_matches", "retrieve_sections")
 graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
 graph = graph.compile()
@@ -231,5 +381,7 @@ if __name__ == "__main__":
         print(f"\nRank: {rank}")
         print(f"Paper ID: {paper['paper_id']}")
         print(f"Title: {paper['title']}")
-        print(f"Cosine similarity: {paper['score']:.1%}")
+        print(f"Match score: {paper['match_score']}")
+        print(f"Why this paper matched: {paper['match_reason']}")
+        print(f"Evidence: {paper['match_explanation']}")
         print(f"Abstract preview: {preview}...")

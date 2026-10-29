@@ -1,5 +1,4 @@
 pydantic
-boto3
 python-dotenv
 qdrant-client
 sentence-transformers
@@ -8,5 +7,5 @@ langchain-ollama
 langchain-core
 requests
 beautifulsoup4
-arxiv==4.0.2
+arxiv
 pytest

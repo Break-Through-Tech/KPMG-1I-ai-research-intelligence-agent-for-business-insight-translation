@@ -4,3 +4,6 @@ venv/
 __pycache__/
 __pycache__/
 qdrant_data/
+
+# We no longer store PDFs in git
+data/*.pdf
