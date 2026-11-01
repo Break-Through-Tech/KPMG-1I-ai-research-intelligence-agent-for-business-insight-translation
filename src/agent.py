@@ -7,6 +7,7 @@ from src.arxiv_html import fetch_sections
 from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
 from pydantic import BaseModel, Field
+import re
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
 # anything past it is silently dropped.
@@ -21,6 +22,16 @@ CONCLUSION_TITLE = re.compile(r"conclu", re.IGNORECASE)
 # all-MiniLM-L6-v2 only reads about the first 1000 characters of a text.
 PIECE_CHARS = 1000
 MAX_PIECES_PER_SECTION = 20
+HIGH_CONF = 0.40
+LOW_CONF = 0.20
+#creating the threshold
+def assess_confidence(chunks: list[dict]) -> tuple[str, float]:
+    top = max((c["score"] for c in chunks), default=0.0)
+    if top >= HIGH_CONF:
+        return "high", top
+    if top >= LOW_CONF:
+        return "medium", top
+    return "low", top
 
 class AgentState(TypedDict): #adding one field to the agent state for citation 
     query: str
@@ -29,6 +40,9 @@ class AgentState(TypedDict): #adding one field to the agent state for citation
     paper_sections: dict[str, list[dict]]
     answer: str
     citations: list[dict]
+    confidence: str
+    top_score: float
+    force: bool
 
 
 class Claim(BaseModel):#output structure 
@@ -49,23 +63,27 @@ class LLMAnswer(BaseModel):
     claims: list[Claim] = Field(
         description="The claims supporting the answer, with citations."
     )
-
 prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You are a research assistant answering questions about AI papers.\n\n"
      "1. Use only the excerpts provided. Do not use outside knowledge.\n"
-     "2. First, identify what the question is asking for, such as a solution, "
-     "a technique, a comparison, or an evaluation method.\n"
-     "3. Examine all the excerpts and select the findings that directly "
-     "help answer the question. Do not rely only on the top-ranked paper.\n"
-     "4. Explain what the findings suggest in response to the question. "
-     "If the question asks how to solve a problem, describe the solutions "
-     "supported by the excerpts. Do not mistake methods for evaluating "
-     "a solution as the solution itself.\n"
+     "2. Work out what the question asks for (a solution, a technique, "
+     "a comparison, or an evaluation method) and match it to the excerpts. "
+     "If the question asks about evaluating or testing something, papers "
+     "that propose evaluation methods or benchmarks DO answer it. If it asks "
+     "how to fix a problem, look for the fixes themselves, not the metrics "
+     "used to score them.\n"
+     "3. Examine all the excerpts and select the findings that help answer "
+     "the question. Do not rely only on the top-ranked paper, and ignore "
+     "excerpts that are clearly unrelated instead of mentioning them.\n"
+     "4. Start your answer with the most relevant findings. Never open by "
+     "saying the excerpts do not address the question.\n"
      "5. Support each claim with the correct paper_id and a short, exact "
      "quote from that paper's excerpt.\n"
-     "6. If the excerpts do not describe a solution or provide enough "
-     "evidence, clearly say what information is missing instead of guessing.\n\n"
+     "6. If the excerpts only partly answer the question, give what they "
+     "support first, then add one short closing sentence on what is missing. "
+     "Only say the papers do not address the question if NONE of the "
+     "excerpts are related to it. Never guess.\n\n"
      "Excerpts:\n{context}"),
     ("human", "{question}"),
 ])
@@ -76,11 +94,12 @@ def retrieve_vectors(state: AgentState):
         results = semantic_search(client, query=state["query"], top_k=3)
     finally:
         client.close()
+    confidence, top_score = assess_confidence(results)
     return {
-        "document_ids": [
-            result["paper_id"] for result in results
-        ],
+        "document_ids": [result["paper_id"] for result in results],
         "retrieved_chunks": results,
+        "confidence": confidence,
+        "top_score": top_score,
     }
 
 def retrieve_sections(state: AgentState):
@@ -166,17 +185,26 @@ def generate_answer(state: AgentState):
         ],
     }
 
+def route_after_retrieval(state: AgentState):
+    if state["confidence"] == "low" and not state["force"]:
+        return END
+    return "retrieve_sections"
+
 graph = StateGraph(AgentState)
 graph.add_node("retrieve_vectors", retrieve_vectors)
 graph.add_node("retrieve_sections", retrieve_sections)
 graph.add_node("generate_answer", generate_answer)
 graph.add_edge(START, "retrieve_vectors")
-graph.add_edge("retrieve_vectors", "retrieve_sections")
+graph.add_conditional_edges(
+    "retrieve_vectors",
+    route_after_retrieval,
+    {"retrieve_sections": "retrieve_sections", END: END},
+)
 graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
 graph = graph.compile()
 
-def run_agent(query: str) -> AgentState:
+def run_agent(query: str, force: bool = False) -> AgentState:
     return graph.invoke({
         "query": query,
         "document_ids": [],
@@ -184,20 +212,18 @@ def run_agent(query: str) -> AgentState:
         "paper_sections": {},
         "answer": "",
         "citations": [],
+        "confidence": "",
+        "top_score": 0.0,
+        "force": force,
     })
 
-if __name__ == "__main__":
-    query = input("Enter your research query: ").strip()
-
-    result = run_agent(query)
-
+def show(result):
     print("\nAnswer:")
     print(result["answer"])
     print("\nSources:")
     for citation in result["citations"]:
         print(f"- Paper ID: {citation['paper_id']}")
         print(f'  Supporting quote: "{citation["supporting_quote"]}"')
-
 
     print("\nRetrieved papers:")
     for rank, paper in enumerate(result["retrieved_chunks"], start=1):
@@ -207,3 +233,27 @@ if __name__ == "__main__":
         print(f"Title: {paper['title']}")
         print(f"Cosine similarity: {paper['score']:.1%}")
         print(f"Abstract preview: {preview}...")
+
+if __name__ == "__main__":
+    query = input("Enter your research query: ").strip()
+    result = run_agent(query)
+
+    if result["confidence"] != "low":
+        show(result)
+    else:
+        print(f"\nWarning: low confidence ({result['top_score']:.0%}). "
+              "The papers found may not match your question well.")
+        new_query = input("Try rephrasing (or press Enter to see results anyway): ").strip()
+
+        if not new_query:
+            show(run_agent(query, force=True))
+        else:
+            second = run_agent(new_query)
+            if second["confidence"] != "low":
+                show(second)
+            else:
+                print("\nBoth searches had low confidence.")
+                print("\n--- Original ---")
+                show(run_agent(query, force=True))
+                print("\n--- Rephrased ---")
+                show(run_agent(new_query, force=True))
