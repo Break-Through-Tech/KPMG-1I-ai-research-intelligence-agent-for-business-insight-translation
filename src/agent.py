@@ -7,10 +7,12 @@ from src.arxiv_html import fetch_sections
 from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
 from pydantic import BaseModel, Field
+import re
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
 # anything past it is silently dropped.
 llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
+small_llm = ChatOllama(model="qwen2.5:1.5b", temperature=0)
 
 # Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
 MAX_SECTION_CHARS_PER_PAPER = 24_000
@@ -24,6 +26,8 @@ MAX_PIECES_PER_SECTION = 20
 
 class AgentState(TypedDict): #adding one field to the agent state for citation 
     query: str
+    is_valid: bool
+    suggested_query: str
     document_ids: list[str]
     retrieved_chunks: list[dict]
     paper_sections: dict[str, list[dict]]
@@ -50,6 +54,35 @@ class LLMAnswer(BaseModel):
         description="The claims supporting the answer, with citations."
     )
 
+
+class QuestionCheck(BaseModel):
+    is_about_ai: bool = Field(
+        description="True if the question is about AI or machine learning research."
+    )
+    is_valid: bool = Field(
+        description="True if the question is about AI research and has a clear objective."
+    )
+    suggested_query: str = Field(
+        description="If not valid but about AI, a clearer version of the question. Otherwise empty."
+    )
+
+validation_prompt = ChatPromptTemplate.from_messages([
+    ("system",
+     "You check questions before they are used to search AI research papers.\n\n"
+     "A question is valid if:\n"
+     "1. It is about AI research.\n"
+     "2. It has a clear objective (it is clear what the user wants to know).\n\n"
+     "If the question is about AI but unclear, write a clearer version in suggested_query.\n"
+     "If the question is not about AI, leave suggested_query empty.\n\n"
+     "Examples:\n"
+     "- 'What methods reduce hallucination in LLMs?' -> valid\n"
+     "- 'yo why does ai make stuff up' -> not valid, suggest "
+     "'What causes hallucination in large language models?'\n"
+     "- 'AI stuff' -> not valid, suggest 'What are recent advances in large language models?'\n"
+     "- 'What is the best pizza place?' -> not valid, no suggestion"),
+    ("human", "{question}"),
+])
+
 prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You are a research assistant answering questions about AI papers.\n\n"
@@ -69,6 +102,37 @@ prompt = ChatPromptTemplate.from_messages([
      "Excerpts:\n{context}"),
     ("human", "{question}"),
 ])
+
+def validate_question(state: AgentState):
+    checker = validation_prompt | small_llm.with_structured_output(QuestionCheck)
+    try:
+        result = checker.invoke({"question": state["query"]})
+    except Exception:
+        result = None
+
+        # If the check fails, let the question through instead of blocking the user.
+    if result is None:
+        return {"is_valid": True, "suggested_query": ""}
+
+    if not result.is_about_ai:
+        message = "I can only answer questions about AI research. Try asking about a specific AI topic."
+        return {"is_valid": False, "suggested_query": "", "answer": message}
+
+    if result.is_valid:
+        return {"is_valid": True, "suggested_query": ""}
+    
+    if result.suggested_query:
+        message = "Your question wasn't quite clear. Did you mean: \"" + result.suggested_query + "\" Try asking that instead."
+    else:
+        message = "I can only answer questions about AI research. Try asking about a specific AI topic."
+
+    return {"is_valid": False, "suggested_query": result.suggested_query, "answer": message}
+
+
+def route_after_validation(state: AgentState):
+    if state["is_valid"]:
+        return "retrieve_vectors"
+    return END
 
 def retrieve_vectors(state: AgentState):
     client = get_client("./qdrant_data")
@@ -167,10 +231,12 @@ def generate_answer(state: AgentState):
     }
 
 graph = StateGraph(AgentState)
+graph.add_node("validate_question", validate_question)       
 graph.add_node("retrieve_vectors", retrieve_vectors)
 graph.add_node("retrieve_sections", retrieve_sections)
 graph.add_node("generate_answer", generate_answer)
-graph.add_edge(START, "retrieve_vectors")
+graph.add_edge(START, "validate_question")
+graph.add_conditional_edges("validate_question", route_after_validation)
 graph.add_edge("retrieve_vectors", "retrieve_sections")
 graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
@@ -179,6 +245,8 @@ graph = graph.compile()
 def run_agent(query: str) -> AgentState:
     return graph.invoke({
         "query": query,
+        "is_valid": False,
+        "suggested_query": "",
         "document_ids": [],
         "retrieved_chunks": [],
         "paper_sections": {},
