@@ -42,7 +42,6 @@ class AgentState(TypedDict): #adding one field to the agent state for citation
     citations: list[dict]
     confidence: str
     top_score: float
-    force: bool
 
 
 class Claim(BaseModel):#output structure 
@@ -65,25 +64,30 @@ class LLMAnswer(BaseModel):
     )
 prompt = ChatPromptTemplate.from_messages([
     ("system",
-     "You are a research assistant answering questions about AI papers.\n\n"
-     "1. Use only the excerpts provided. Do not use outside knowledge.\n"
-     "2. Work out what the question asks for (a solution, a technique, "
-     "a comparison, or an evaluation method) and match it to the excerpts. "
-     "If the question asks about evaluating or testing something, papers "
-     "that propose evaluation methods or benchmarks DO answer it. If it asks "
-     "how to fix a problem, look for the fixes themselves, not the metrics "
-     "used to score them.\n"
-     "3. Examine all the excerpts and select the findings that help answer "
-     "the question. Do not rely only on the top-ranked paper, and ignore "
-     "excerpts that are clearly unrelated instead of mentioning them.\n"
-     "4. Start your answer with the most relevant findings. Never open by "
-     "saying the excerpts do not address the question.\n"
-     "5. Support each claim with the correct paper_id and a short, exact "
-     "quote from that paper's excerpt.\n"
-     "6. If the excerpts only partly answer the question, give what they "
-     "support first, then add one short closing sentence on what is missing. "
-     "Only say the papers do not address the question if NONE of the "
-     "excerpts are related to it. Never guess.\n\n"
+     "You are a helpful research assistant who answers questions about AI "
+     "papers using the excerpts below.\n\n"
+     "1. Your goal is to be useful. Read every excerpt and find whatever "
+     "helps answer the question: direct answers, related techniques, "
+     "ideas that could be adapted, or background that gives useful "
+     "context.\n"
+     "2. You may connect ideas across excerpts and reason about how they "
+     "apply to the question. When a paper does not answer the question "
+     "directly, explain how its idea could be relevant or adapted. Say "
+     "clearly when something is your inference rather than what the paper "
+     "states, for example: 'This paper does not study routing, but its "
+     "approach of ... could be applied by ...'.\n"
+     "3. Stay grounded. Every claim about what a paper says or found must "
+     "match its excerpt. Do not invent results, numbers, or methods.\n"
+     "4. Always begin with the most useful information. Never open by "
+     "saying the excerpts do not address the question, and do not refuse "
+     "to answer.\n"
+     "5. Draw on several papers when they have something to offer, and "
+     "skip any that have nothing to do with the question.\n"
+     "6. Support each claim about a paper with its paper_id and a short, "
+     "exact quote from that paper's excerpt. Inferences do not need a "
+     "quote, but they should point to the paper they build on.\n"
+     "7. If important parts of the question are not covered, finish with "
+     "one short sentence saying what is missing.\n\n"
      "Excerpts:\n{context}"),
     ("human", "{question}"),
 ])
@@ -186,7 +190,7 @@ def generate_answer(state: AgentState):
     }
 
 def route_after_retrieval(state: AgentState):
-    if state["confidence"] == "low" and not state["force"]:
+    if state["confidence"] == "low":
         return END
     return "retrieve_sections"
 
@@ -204,7 +208,7 @@ graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
 graph = graph.compile()
 
-def run_agent(query: str, force: bool = False) -> AgentState:
+def run_agent(query: str) -> AgentState:
     return graph.invoke({
         "query": query,
         "document_ids": [],
@@ -214,7 +218,6 @@ def run_agent(query: str, force: bool = False) -> AgentState:
         "citations": [],
         "confidence": "",
         "top_score": 0.0,
-        "force": force,
     })
 
 def show(result):
@@ -238,22 +241,8 @@ if __name__ == "__main__":
     query = input("Enter your research query: ").strip()
     result = run_agent(query)
 
-    if result["confidence"] != "low":
-        show(result)
-    else:
+    if result["confidence"] == "low":
         print(f"\nWarning: low confidence ({result['top_score']:.0%}). "
               "The papers found may not match your question well.")
-        new_query = input("Try rephrasing (or press Enter to see results anyway): ").strip()
-
-        if not new_query:
-            show(run_agent(query, force=True))
-        else:
-            second = run_agent(new_query)
-            if second["confidence"] != "low":
-                show(second)
-            else:
-                print("\nBoth searches had low confidence.")
-                print("\n--- Original ---")
-                show(run_agent(query, force=True))
-                print("\n--- Rephrased ---")
-                show(run_agent(new_query, force=True))
+    else:
+        show(result)
