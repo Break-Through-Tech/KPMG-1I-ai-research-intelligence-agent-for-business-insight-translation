@@ -59,7 +59,25 @@ The agent:
 2. Fetches each paper's H2 sections from `arxiv.org/html/<arxiv_id>`.
 3. Sends the abstracts and sections to `qwen2.5:7b`, which answers with cited claims.
 
-It prints the answer, the cited paper IDs with supporting quotes, and the 3 retrieved papers. A run takes 1 to 3 minutes.
+It prints the answer, the cited paper IDs with supporting quotes, and the 3 retrieved papers, numbered [1] to [3]. A run takes 1 to 3 minutes.
+
+### Follow-up questions
+
+After an answer you can keep asking. The agent remembers the last 3 turns and handles a follow-up in one of two ways (logic in `src/followup.py`):
+
+- **About the papers already shown** ("What are the limitations of paper 2?", "Explain that more simply", "What does this mean for a bank?"): it answers from those papers again, without a new search or arXiv fetch, so it is faster.
+- **Needs different papers** ("What about in healthcare?", "Are there other papers on this topic?", or a new topic): it searches again. If you ask for *other* papers, the ones already shown are left out.
+
+Either way the follow-up is first rewritten into a question that makes sense on its own, and the agent prints it as `(Understood as: ...)` when it changed. References to a shown paper (`paper 2`, `the second paper`, `[2]`, its arXiv ID or title, `these papers`) are recognized without an LLM call; anything else costs one short extra call to `qwen2.5:7b`.
+
+After each answer the agent suggests three follow-ups. Type a number to ask one, `/new` to start a new conversation, or press Enter on an empty line to quit.
+
+From code, pass the previous result's history back in:
+
+```python
+first = run_agent("How can hallucination in LLMs be reduced?")
+second = run_agent("What are the limitations of paper 2?", first["history"])
+```
 
 ## 4. Run the tests
 
