@@ -1,15 +1,15 @@
-PYTHON ?= python3
+PYTHON ?= ./venv/bin/python
 
-.PHONY: seed-vector-store test_vector_store agent
+.PHONY: ingest agent test
 
-seed-vector-store:
-	$(PYTHON) -m scripts.seed_vector_store
-
-test-seed-vector-store:
-	$(PYTHON) -m tests.test_seed_vector_store
+ingest:
+	$(PYTHON) -m scripts.backfill_papers
 
 agent:
 	$(PYTHON) -m src.agent
 
 ui:
 	$(PYTHON) -m streamlit run app.py
+
+test:
+	$(PYTHON) -m pytest tests
