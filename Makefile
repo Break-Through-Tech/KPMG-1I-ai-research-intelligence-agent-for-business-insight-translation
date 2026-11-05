@@ -9,4 +9,4 @@ agent:
 	$(PYTHON) -m src.agent
 
 test:
-	$(PYTHON) -m pytest tests
+	$(PYTHON) -m pytesnt tests
