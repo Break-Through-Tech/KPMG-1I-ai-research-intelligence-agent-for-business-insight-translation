@@ -120,3 +120,16 @@ Downloaded PDFs are placed in `data/`, and their IDs are recorded in `data/seen_
 - Deleting `qdrant_data/` removes all locally stored vectors and payloads.
 
 If the agent reports that the `papers` collection does not exist, run `make seed-vector-store` first.
+
+## Optional: web UI
+
+Start the Streamlit app from the repository root:
+
+```bash
+make ui
+```
+
+Then open the URL it prints (usually http://localhost:8501). The page asks the
+same question flow as `make agent` and shows the answer, cited quotes, retrieved
+papers, and timings. It needs the same setup: `make seed-vector-store` and Ollama
+running with `qwen2.5:7b`.

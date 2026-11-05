@@ -10,3 +10,6 @@ test-seed-vector-store:
 
 agent:
 	$(PYTHON) -m src.agent
+
+ui:
+	$(PYTHON) -m streamlit run app.py

@@ -8,3 +8,4 @@ langchain-ollama
 langchain-core
 requests
 beautifulsoup4
+streamlit
