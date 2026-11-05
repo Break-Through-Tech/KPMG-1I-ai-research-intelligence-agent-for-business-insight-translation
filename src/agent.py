@@ -1,3 +1,5 @@
+import re
+
 import requests
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict
@@ -6,6 +8,16 @@ from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
 from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
+from src.followup import (
+    FOLLOW_UP_SYSTEM_PROMPT,
+    NEW_SEARCH,
+    SAME_PAPERS,
+    FollowUpDecision,
+    add_turn,
+    make_turn,
+    plan_follow_up,
+    suggest_follow_ups,
+)
 from pydantic import BaseModel, Field
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
@@ -23,12 +35,21 @@ PIECE_CHARS = 1000
 MAX_PIECES_PER_SECTION = 20
 
 class AgentState(TypedDict): #adding one field to the agent state for citation 
+    # The standalone question every node works with. For a follow-up this is
+    # the rewritten question, not what the user typed (see src/followup.py).
     query: str
+    original_query: str
+    # Earlier turns in this conversation, oldest first (see make_turn).
+    history: list[dict]
+    route: str
+    focus_paper_ids: list[str]
+    exclude_paper_ids: list[str]
     document_ids: list[str]
     retrieved_chunks: list[dict]
     paper_sections: dict[str, list[dict]]
     answer: str
     citations: list[dict]
+    follow_up_suggestions: list[str]
 
 
 class Claim(BaseModel):#output structure 
@@ -70,12 +91,54 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
+follow_up_prompt = ChatPromptTemplate.from_messages([
+    ("system", FOLLOW_UP_SYSTEM_PROMPT),
+    ("human", "New message: {question}"),
+])
+
+def decide_follow_up(inputs: dict) -> FollowUpDecision | None:
+    structured_llm = llm.with_structured_output(FollowUpDecision, include_raw=True)
+    return (follow_up_prompt | structured_llm).invoke(inputs)["parsed"]
+
+def contextualize_query(state: AgentState):
+    """Turn a follow-up into a standalone question and pick its route."""
+    plan = plan_follow_up(state["original_query"], state["history"], decide_follow_up)
+    return {
+        "query": plan.standalone_query,
+        "route": plan.route,
+        "focus_paper_ids": plan.focus_paper_ids,
+        "exclude_paper_ids": plan.exclude_paper_ids,
+    }
+
+def route_follow_up(state: AgentState):
+    return "reuse_papers" if state["route"] == SAME_PAPERS else "retrieve_vectors"
+
+def reuse_papers(state: AgentState):
+    """Answer from the papers already shown instead of searching again."""
+    last = state["history"][-1]
+    focus = set(state["focus_paper_ids"])
+    papers = [p for p in last["papers"] if not focus or p["paper_id"] in focus]
+    return {
+        "document_ids": [p["paper_id"] for p in papers],
+        "retrieved_chunks": papers,
+        "paper_sections": {
+            pid: sections
+            for pid, sections in last["paper_sections"].items()
+            if pid in {p["paper_id"] for p in papers}
+        },
+    }
+
 def retrieve_vectors(state: AgentState):
+    top_k = 3
+    exclude = set(state.get("exclude_paper_ids") or [])
     client = get_client("./qdrant_data")
     try:
-        results = semantic_search(client, query=state["query"], top_k=3)
+        # Ask for extra results so there are still top_k left after dropping
+        # papers the user has already seen.
+        results = semantic_search(client, query=state["query"], top_k=top_k + len(exclude))
     finally:
         client.close()
+    results = [r for r in results if r["paper_id"] not in exclude][:top_k]
     return {
         "document_ids": [
             result["paper_id"] for result in results
@@ -167,29 +230,56 @@ def generate_answer(state: AgentState):
     }
 
 graph = StateGraph(AgentState)
+graph.add_node("contextualize_query", contextualize_query)
+graph.add_node("reuse_papers", reuse_papers)
 graph.add_node("retrieve_vectors", retrieve_vectors)
 graph.add_node("retrieve_sections", retrieve_sections)
 graph.add_node("generate_answer", generate_answer)
-graph.add_edge(START, "retrieve_vectors")
+graph.add_edge(START, "contextualize_query")
+graph.add_conditional_edges(
+    "contextualize_query",
+    route_follow_up,
+    {"reuse_papers": "reuse_papers", "retrieve_vectors": "retrieve_vectors"},
+)
+graph.add_edge("reuse_papers", "generate_answer")
 graph.add_edge("retrieve_vectors", "retrieve_sections")
 graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
 graph = graph.compile()
 
-def run_agent(query: str) -> AgentState:
-    return graph.invoke({
+def run_agent(query: str, history: list[dict] | None = None) -> AgentState:
+    """Answer one question. Pass the `history` from the previous result to ask a follow-up.
+
+    The returned state has an updated `history` (including this turn) and
+    `follow_up_suggestions` to offer the user next.
+    """
+    history = list(history or [])
+    result = graph.invoke({
         "query": query,
+        "original_query": query,
+        "history": history,
+        "route": NEW_SEARCH,
+        "focus_paper_ids": [],
+        "exclude_paper_ids": [],
         "document_ids": [],
         "retrieved_chunks": [],
         "paper_sections": {},
         "answer": "",
         "citations": [],
+        "follow_up_suggestions": [],
     })
+    turn = make_turn(result, history)
+    result["history"] = add_turn(history, turn)
+    result["follow_up_suggestions"] = suggest_follow_ups(result["history"])
+    return result
 
-if __name__ == "__main__":
-    query = input("Enter your research query: ").strip()
-
-    result = run_agent(query)
+def print_result(result: AgentState) -> None:
+    if result["query"] != result["original_query"]:
+        print(f"\n(Understood as: {result['query']})")
+    shown = result["history"][-1]["papers"]
+    if result["route"] == SAME_PAPERS:
+        ranks = [str(rank) for rank, p in enumerate(shown, start=1) if p["paper_id"] in result["document_ids"]]
+        print(f"(Answered from paper(s) {', '.join(ranks)} shown earlier)")
 
     print("\nAnswer:")
     print(result["answer"])
@@ -198,12 +288,40 @@ if __name__ == "__main__":
         print(f"- Paper ID: {citation['paper_id']}")
         print(f'  Supporting quote: "{citation["supporting_quote"]}"')
 
+    if result["route"] == NEW_SEARCH:
+        print("\nPapers:")
+        for rank, paper in enumerate(shown, start=1):
+            preview = paper["chunk_text"][:100].replace("\n", " ")
+            print(f"\n[{rank}] {paper['title']}")
+            print(f"    Paper ID: {paper['paper_id']}")
+            print(f"    Cosine similarity: {paper['score']:.1%}")
+            print(f"    Abstract preview: {preview}...")
 
-    print("\nRetrieved papers:")
-    for rank, paper in enumerate(result["retrieved_chunks"], start=1):
-        preview = paper["chunk_text"][:100].replace("\n", " ")
-        print(f"\nRank: {rank}")
-        print(f"Paper ID: {paper['paper_id']}")
-        print(f"Title: {paper['title']}")
-        print(f"Cosine similarity: {paper['score']:.1%}")
-        print(f"Abstract preview: {preview}...")
+    if result["follow_up_suggestions"]:
+        print("\nYou could ask next:")
+        for number, suggestion in enumerate(result["follow_up_suggestions"], start=1):
+            print(f"  {number}. {suggestion}")
+
+def run_chat() -> None:
+    print("Ask a research question. Then ask a follow-up, or type a suggestion's number.")
+    print("Type /new to start a new conversation, or press Enter on an empty line to quit.")
+    history: list[dict] = []
+    suggestions: list[str] = []
+    while True:
+        text = input("\nYou: ").strip()
+        if not text:
+            return
+        if text.lower() == "/new":
+            history, suggestions = [], []
+            print("Started a new conversation.")
+            continue
+        if text.isdigit() and 1 <= int(text) <= len(suggestions):
+            text = suggestions[int(text) - 1]
+            print(f"You: {text}")
+        result = run_agent(text, history)
+        print_result(result)
+        history = result["history"]
+        suggestions = result["follow_up_suggestions"]
+
+if __name__ == "__main__":
+    run_chat()
