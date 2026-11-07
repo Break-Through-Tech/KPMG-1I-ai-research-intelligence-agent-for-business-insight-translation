@@ -103,7 +103,7 @@ def main() -> None:
             except Exception as error:  # surface setup problems in the UI
                 st.error(
                     "The agent could not complete this request. "
-                    "Check that Ollama is running and that `make seed-vector-store` "
+                    "Check that Ollama is running and that `make ingest` "
                     f"has been run.\n\nDetails: {error}"
                 )
                 return
