@@ -115,7 +115,5 @@ make ui
 
 Then open the URL it prints (usually http://localhost:8501). The page asks the
 same question flow as `make agent` and shows the answer, cited quotes, retrieved
-papers, and timings. It needs the same setup: `make seed-vector-store` and Ollama
+papers, and timings. It needs the same setup: `make ingest` and Ollama
 running with `qwen2.5:7b`.
-papers, and timings. It needs the same setup: `make ingest` and Ollama running
-with `qwen2.5:7b`.
