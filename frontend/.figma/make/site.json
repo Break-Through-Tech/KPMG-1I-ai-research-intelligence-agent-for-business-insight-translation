@@ -1,0 +1,10 @@
+{
+  "description": "Helps KPMG employees explore AI research, assess evidence and emerging trends, and turn findings into actionable business insights to share with colleagues.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
