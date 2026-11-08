@@ -9,6 +9,21 @@ from src.vector_store import get_client, semantic_search
 from pydantic import BaseModel, Field
 import re
 
+import sqlite3
+import uuid
+
+from typing import Optional
+
+from typing import Annotated
+from langchain_core.messages import (
+    AnyMessage,
+    HumanMessage,
+    AIMessage,
+)
+from langchain_core.prompts import MessagesPlaceholder
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.sqlite import SqliteSaver
+
 # Ollama's default context is much smaller than what qwen2.5 supports, and
 # anything past it is silently dropped.
 llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
@@ -45,6 +60,10 @@ class AgentState(TypedDict): #adding one field to the agent state for citation
     citations: list[dict]
     confidence: str
     top_score: float
+
+    # Stores conversation messages across turns
+    messages: Annotated[list[AnyMessage], add_messages]
+    
 
 
 class Claim(BaseModel):#output structure 
@@ -125,6 +144,43 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
+contextualize_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "Rewrite the user's latest question as a standalone research "
+        "question using the conversation history when needed. "
+        "If the latest question is already clear or introduces a new "
+        "topic, keep its meaning unchanged. Do not answer the question. "
+        "Return only the rewritten question."
+    ),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "{question}"),
+])
+
+
+def contextualize_query(state: AgentState):
+    messages = state.get("messages", [])
+
+    # The latest message is the question just submitted.
+    history = messages[:-1]
+
+    # No previous conversation: use the question as written.
+    if not history:
+        return {"query": state["query"]}
+
+    chain = contextualize_prompt | small_llm
+
+    result = chain.invoke({
+        "history": history,
+        "question": state["query"],
+    })
+
+    standalone_query = result.content.strip()
+
+    return {
+        "query": standalone_query or state["query"]
+    }
+
 def validate_question(state: AgentState):
     checker = validation_prompt | small_llm.with_structured_output(QuestionCheck)
     try:
@@ -138,7 +194,12 @@ def validate_question(state: AgentState):
 
     if not result.is_about_ai:
         message = "I can only answer questions about AI research. Try asking about a specific AI topic."
-        return {"is_valid": False, "suggested_query": "", "answer": message}
+        return {
+            "is_valid": False,
+            "suggested_query": "",
+            "answer": message,
+            "messages": [AIMessage(content=message)],
+        }
 
     if result.is_valid:
         return {"is_valid": True, "suggested_query": ""}
@@ -148,7 +209,12 @@ def validate_question(state: AgentState):
     else:
         message = "I can only answer questions about AI research. Try asking about a specific AI topic."
 
-    return {"is_valid": False, "suggested_query": result.suggested_query, "answer": message}
+    return {
+        "is_valid": False,
+        "suggested_query": result.suggested_query,
+        "answer": message,
+        "messages": [AIMessage(content=message)],
+    }
 
 
 def route_after_validation(state: AgentState):
@@ -236,8 +302,13 @@ def generate_answer(state: AgentState):
 
     if result is None:
         fallback = (prompt | llm).invoke(inputs)
-        return {"answer": fallback.content, "citations": []}
+        answer = fallback.content
 
+        return {
+            "answer": answer,
+            "citations": [],
+            "messages": [AIMessage(content=answer)],
+        }
     answer = result.summary
     for claim in result.claims:
         answer += f"\n- {claim.statement} [{claim.paper_id}]"
@@ -251,6 +322,7 @@ def generate_answer(state: AgentState):
             }
             for claim in result.claims
         ],
+        "messages": [AIMessage(content=answer)],
     }
 
 def route_after_retrieval(state: AgentState):
@@ -258,35 +330,75 @@ def route_after_retrieval(state: AgentState):
         return END
     return "retrieve_sections"
 
+def finish_low_confidence(state: AgentState):
+    answer = (
+        f"The papers found may not match your question very well. "
+        f"The highest similarity score was {state['top_score']:.0%}. "
+        "Try asking your question differently or using more specific terms."
+    )
+
+    return {
+        "answer": answer,
+        "citations": [],
+        "messages": [AIMessage(content=answer)],
+    }
+
 graph = StateGraph(AgentState)
+
+graph.add_node("contextualize_query", contextualize_query)
 graph.add_node("validate_question", validate_question)       
 graph.add_node("retrieve_vectors", retrieve_vectors)
 graph.add_node("retrieve_sections", retrieve_sections)
 graph.add_node("generate_answer", generate_answer)
-graph.add_edge(START, "validate_question")
-graph.add_conditional_edges("validate_question", route_after_validation)
+graph.add_node("finish_low_confidence", finish_low_confidence)
+graph.add_edge(START, "contextualize_query")
+graph.add_edge("contextualize_query", "validate_question")
+
+graph.add_conditional_edges("validate_question", route_after_validation,
+                            {"retrieve_vectors": "retrieve_vectors",
+                             END: END,
+                            },
+)
 graph.add_conditional_edges(
     "retrieve_vectors",
     route_after_retrieval,
-    {"retrieve_sections": "retrieve_sections", END: END},
+    {"retrieve_sections": "retrieve_sections", END: "finish_low_confidence",
+    },
 )
 graph.add_edge("retrieve_sections", "generate_answer")
 graph.add_edge("generate_answer", END)
-graph = graph.compile()
+graph.add_edge("finish_low_confidence", END)
 
-def run_agent(query: str) -> AgentState:
-    return graph.invoke({
-        "query": query,
-        "is_valid": False,
-        "suggested_query": "",
-        "document_ids": [],
-        "retrieved_chunks": [],
-        "paper_sections": {},
-        "answer": "",
-        "citations": [],
-        "confidence": "",
-        "top_score": 0.0,
-    })
+# Persistent conversation storage
+connection = sqlite3.connect(
+    "chat_memory.sqlite",
+    check_same_thread=False,
+)
+
+checkpointer = SqliteSaver(connection)
+checkpointer.setup()
+
+graph = graph.compile(checkpointer=checkpointer)
+
+def run_agent(query: str, thread_id: Optional[str] = None) -> AgentState:
+
+    if thread_id is None:
+        thread_id = str(uuid.uuid4())
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id
+        }
+    }
+    return graph.invoke(
+        {
+            "query": query,
+            "messages": [
+                HumanMessage(content=query)
+            ],
+        },
+        config=config,
+    )
 
 def show(result):
     print("\nAnswer:")
