@@ -200,6 +200,27 @@ const papers = [
   },
 ];
 
+type Paper = (typeof papers)[number];
+
+function papersFromResearch(data: ResearchResponse | null): Paper[] {
+  const chunks = data?.retrieved_chunks;
+  if (!chunks?.length) return papers;
+
+  return chunks.map((chunk) => {
+    const citation = data?.citations?.find((item) => item.paper_id === chunk.paper_id);
+    return {
+      title: chunk.title || "Research source",
+      authors: "Metadata unavailable",
+      date: "—",
+      source: chunk.paper_id || "Research source",
+      category: chunk.section_title || "Research source",
+      relevance: Math.round((chunk.score ?? 0) * 100),
+      abstract: chunk.chunk_text || "",
+      quote: citation?.supporting_quote || chunk.chunk_text || "",
+    };
+  });
+}
+
 const nav = [
   { view: "home" as View, label: "Research", icon: "search" },
   { view: "latest" as View, label: "Latest AI", icon: "clock" },
@@ -630,7 +651,7 @@ function PaperCard({
   openPaper,
   compact = false,
 }: {
-  paper: (typeof papers)[0];
+  paper: Paper;
   openPaper: () => void;
   compact?: boolean;
 }) {
@@ -712,6 +733,10 @@ function Results({
   back: () => void;
   openPaper: () => void;
 }) {
+  const resultPapers = papersFromResearch(data);
+  const selectedSourceCount = data?.retrieved_chunks?.length ?? papers.length;
+  const topRelevance = data?.top_score != null ? Math.round(data.top_score * 100) : 92;
+
   return (
     <main className="page results-page">
       <div className="page-header">
@@ -771,11 +796,11 @@ function Results({
                 <span className="confidence-badge">
                   <i /> {data?.confidence}
                 </span>
-                <span>Based on 3 selected sources</span>
+                <span>Based on {selectedSourceCount} selected sources</span>
               </div>
               <div>
                 <span>Top relevance</span>
-                <strong>92%</strong>
+                <strong>{topRelevance}%</strong>
               </div>
             </div>
           </section>
@@ -789,7 +814,7 @@ function Results({
             </button>
           </div>
           <div className="papers">
-            {papers.map((p, i) => (
+            {resultPapers.map((p) => (
               <PaperCard key={p.title} paper={p} openPaper={openPaper} />
             ))}
           </div>
@@ -822,7 +847,7 @@ function Results({
               </div>
               <div>
                 <dt>Evidence selected</dt>
-                <dd>3</dd>
+                <dd>{selectedSourceCount}</dd>
               </div>
               <div>
                 <dt>Year range</dt>
