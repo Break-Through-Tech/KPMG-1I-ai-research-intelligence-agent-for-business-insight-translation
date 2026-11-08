@@ -384,6 +384,8 @@ function Home({ research, openPaper }: { research: (q: string) => void; openPape
   const [query, setQuery] = useState("");
   const [selectedFocus, setSelectedFocus] = useState<string[]>(["Responsible AI"]);
   const [showMoreFocus, setShowMoreFocus] = useState(false);
+  const [showSuggestedQuestions, setShowSuggestedQuestions] = useState(false);
+  const [suggestedQuestionsHovered, setSuggestedQuestionsHovered] = useState(false);
   const primaryFocus = [
     "Responsible AI",
     "AI Agents",
@@ -434,7 +436,12 @@ function Home({ research, openPaper }: { research: (q: string) => void; openPape
             </button>
           </div>
           <div className="composer-focus">
-            <span className="focus-label">Research focus</span>
+            <span
+              className="focus-label"
+              style={{ fontSize: 10, fontWeight: 600, color: "var(--text)" }}
+            >
+              Research focus:
+            </span>
             <div className="focus-chips">
               {primaryFocus.map((focus) => (
                 <button
@@ -442,6 +449,7 @@ function Home({ research, openPaper }: { research: (q: string) => void; openPape
                   className={selectedFocus.includes(focus) ? "selected" : ""}
                   aria-pressed={selectedFocus.includes(focus)}
                   onClick={() => toggleFocus(focus)}
+                  style={{ fontSize: 9, padding: "5px 10px" }}
                   key={focus}
                 >
                   {focus}
@@ -452,6 +460,7 @@ function Home({ research, openPaper }: { research: (q: string) => void; openPape
                 className={`more-focus ${showMoreFocus ? "open" : ""}`}
                 aria-expanded={showMoreFocus}
                 onClick={() => setShowMoreFocus(!showMoreFocus)}
+                style={{ fontSize: 9, padding: "5px 10px" }}
               >
                 More <Icon name="down" size={12} />
               </button>
@@ -462,6 +471,7 @@ function Home({ research, openPaper }: { research: (q: string) => void; openPape
                     className={selectedFocus.includes(focus) ? "selected" : ""}
                     aria-pressed={selectedFocus.includes(focus)}
                     onClick={() => toggleFocus(focus)}
+                    style={{ fontSize: 9, padding: "5px 10px" }}
                     key={focus}
                   >
                     {focus}
@@ -470,39 +480,70 @@ function Home({ research, openPaper }: { research: (q: string) => void; openPape
             </div>
           </div>
           <div className="composer-meta">
-            <span>
-              <Icon name="spark" size={14} /> Evidence-led research
-            </span>
-            <span>Enter to research</span>
+            <button
+              type="button"
+              aria-expanded={showSuggestedQuestions}
+              onClick={() => setShowSuggestedQuestions((current) => !current)}
+              onMouseEnter={() => setSuggestedQuestionsHovered(true)}
+              onMouseLeave={() => setSuggestedQuestionsHovered(false)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                marginLeft: "auto",
+                padding: 0,
+                color: suggestedQuestionsHovered ? "var(--blue-dark)" : "var(--blue)",
+                background: "none",
+                border: 0,
+                fontSize: 10,
+                fontWeight: 600,
+                transition: "color 150ms ease",
+              }}
+            >
+              Suggested questions
+              <span
+                style={{
+                  display: "inline-flex",
+                  transform: showSuggestedQuestions ? "rotate(180deg)" : "none",
+                  transition: "transform 160ms ease",
+                }}
+              >
+                <Icon name="down" size={12} />
+              </span>
+            </button>
+          </div>
+          <div
+            style={{
+              maxHeight: showSuggestedQuestions ? 190 : 0,
+              opacity: showSuggestedQuestions ? 1 : 0,
+              overflow: "hidden",
+              transition: "max-height 180ms ease, opacity 140ms ease",
+            }}
+          >
+            <div className="suggestions">
+              {suggestions.map((s, i) => (
+                <button key={s} type="button" onClick={() => research(s)}>
+                  <span className="suggest-icon">
+                    <Icon name={["trend", "layers", "target"][i]} size={17} />
+                  </span>
+                  <span>{s}</span>
+                  <Icon name="arrow" size={17} />
+                </button>
+              ))}
+            </div>
           </div>
         </form>
       </section>
       <div className="home-content">
         <SectionTitle
-          title="Suggested for you"
-          subtitle="Questions based on current research themes"
-        />
-        <div className="suggestions">
-          {suggestions.map((s, i) => (
-            <button key={s} onClick={() => research(s)}>
-              <span className="suggest-icon">
-                <Icon name={["trend", "layers", "target"][i]} size={17} />
-              </span>
-              <span>{s}</span>
-              <Icon name="arrow" size={17} />
-            </button>
-          ))}
-        </div>
-        <SectionTitle
-          title="Recommended research"
-          subtitle="Research selected based on current AI themes and business relevance."
+          title="Trending research"
+          subtitle="Research gaining attention across current AI themes."
         />
         <div className="recommended-papers">
           {papers.map((paper) => (
             <RecommendedPaper paper={paper} openPaper={openPaper} key={paper.title} />
           ))}
         </div>
-        <DemoNotice />
       </div>
     </main>
   );
