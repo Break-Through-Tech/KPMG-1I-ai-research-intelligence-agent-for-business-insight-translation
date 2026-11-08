@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
 import kpmgBlueLogo from "./assets/kpmg-logo-blue.svg";
 import kpmgWhiteLogo from "./assets/kpmg-logo-white.svg";
+import { runResearch, type ResearchResponse } from "./api/research";
 
 type View = "home" | "results" | "latest" | "trends" | "focus" | "paper";
 type Vote = "up" | "down" | null;
@@ -702,10 +703,12 @@ function PaperCard({
 
 function Results({
   query,
+  data,
   back,
   openPaper,
 }: {
   query: string;
+  data: ResearchResponse | null;
   back: () => void;
   openPaper: () => void;
 }) {
@@ -743,15 +746,10 @@ function Results({
               </span>
               <div>
                 <small>Executive insight</small>
-                <h2>Evidence supports focused adoption with clear operational guardrails</h2>
+                <h2>{data?.answer ? "Executive insight" : "Research insight"}</h2>
               </div>
             </div>
-            <p>
-              Enterprise AI programs are moving from broad experimentation toward bounded,
-              evidence-led deployment. The strongest outcomes appear where organizations pair
-              high-value workflows with robust retrieval, explicit human oversight, and continuous
-              evaluation tied to business measures.
-            </p>
+            <p>{data?.answer ?? "No research answer was returned."}</p>
             <div className="takeaways">
               <h3>Key takeaways</h3>
               <ul>
@@ -771,7 +769,7 @@ function Results({
             <div className="confidence-row">
               <div>
                 <span className="confidence-badge">
-                  <i /> High confidence
+                  <i /> {data?.confidence}
                 </span>
                 <span>Based on 3 selected sources</span>
               </div>
@@ -1386,6 +1384,7 @@ export default function App() {
   );
   const [query, setQuery] = useState(suggestions[1]);
   const [progress, setProgress] = useState(false);
+  const [researchData, setResearchData] = useState<ResearchResponse | null>(null);
   const [previousView, setPreviousView] = useState<View>("results");
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -1393,12 +1392,21 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("research-sidebar-collapsed", String(sidebarCollapsed));
   }, [sidebarCollapsed]);
-  const research = (q: string) => {
-    setQuery(q);
-    setProgress(true);
-    setView("results");
-    setTimeout(() => setProgress(false), 1450);
-  };
+const research = async (q: string) => {
+  setQuery(q);
+  setProgress(true);
+  setResearchData(null);
+  setView("results");
+
+  try {
+    const data = await runResearch(q);
+    setResearchData(data);
+  } catch (error) {
+    console.error("Research request failed:", error);
+  } finally {
+    setProgress(false);
+  }
+};
   const openPaper = () => {
     setPreviousView(view);
     setView("paper");
@@ -1426,7 +1434,11 @@ export default function App() {
           (progress ? (
             <Progress query={query} />
           ) : (
-            <Results query={query} back={() => setView("home")} openPaper={openPaper} />
+            <Results 
+            query={query}
+            data={researchData} 
+            back={() => setView("home")} 
+            openPaper={openPaper} />
           ))}
         {view === "latest" && <Latest openPaper={openPaper} />}
         {view === "trends" && <Trends />}

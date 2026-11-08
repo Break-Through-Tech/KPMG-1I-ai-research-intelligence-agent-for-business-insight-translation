@@ -1,6 +1,6 @@
 """Request and response models for the Stage 1 API bridge."""
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -26,8 +26,8 @@ class ResearchRequest(BaseModel):
 class ResearchResponse(BaseModel):
     """Subset of the existing run_agent result exposed to the frontend."""
 
-    answer: str | None = None
-    confidence: str | None = None
-    top_score: float | None = None
-    retrieved_chunks: list[dict[str, Any]] | None = None
-    citations: list[dict[str, Any]] | None = None
+    answer: Optional[str] = None
+    confidence: Optional[str] = None
+    top_score: Optional[float] = None
+    retrieved_chunks: Optional[list[dict[str, Any]]] = None
+    citations: Optional[list[dict[str, Any]]] = None
