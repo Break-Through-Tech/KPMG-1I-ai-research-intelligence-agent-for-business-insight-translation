@@ -9,6 +9,7 @@ class ResearchRequest(BaseModel):
     """Input accepted by the React research composer."""
 
     query: str = Field(..., min_length=1, description="AI research question")
+    thread_id: Optional[str] = None
     focus_areas: list[str] = Field(
         default_factory=list,
         description="Prototype-only UI selections; not used for retrieval in Stage 1",

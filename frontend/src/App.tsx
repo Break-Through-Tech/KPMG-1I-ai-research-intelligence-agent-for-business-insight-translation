@@ -1451,6 +1451,7 @@ export default function App() {
   const [query, setQuery] = useState(suggestions[1]);
   const [progress, setProgress] = useState(false);
   const [researchData, setResearchData] = useState<ResearchResponse | null>(null);
+  const [threadId] = useState(() => crypto.randomUUID());
   const [previousView, setPreviousView] = useState<View>("results");
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -1465,7 +1466,7 @@ const research = async (q: string) => {
   setView("results");
 
   try {
-    const data = await runResearch(q);
+    const data = await runResearch(q, threadId);
     setResearchData(data);
   } catch (error) {
     console.error("Research request failed:", error);

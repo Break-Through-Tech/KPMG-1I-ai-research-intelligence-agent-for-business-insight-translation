@@ -20,7 +20,10 @@ export type ResearchResponse = {
   citations?: Citation[];
 };
 
-export async function runResearch(query: string): Promise<ResearchResponse> {
+export async function runResearch(
+  query: string,
+  threadId?: string
+): Promise<ResearchResponse> {
   const response = await fetch("/api/research", {
     method: "POST",
     headers: {
@@ -28,6 +31,7 @@ export async function runResearch(query: string): Promise<ResearchResponse> {
     },
     body: JSON.stringify({
       query,
+      thread_id: threadId,
       focus_areas: [],
     }),
   });
