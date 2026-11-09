@@ -20,7 +20,7 @@ def test_research_adapts_existing_result_schema(monkeypatch) -> None:
     monkeypatch.setattr(
         research_route,
         "run_agent",
-        lambda query: {
+        lambda query, thread_id=None: {
             "answer": f"Answer for {query}",
             "confidence": "high",
             "top_score": 0.78,
