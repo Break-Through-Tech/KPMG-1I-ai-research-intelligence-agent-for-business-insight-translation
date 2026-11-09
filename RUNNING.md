@@ -79,6 +79,33 @@ The Make targets are shortcuts for these commands:
 ./venv/bin/python -m pytest tests
 ```
 
+## 6. Run the Stage 1 React/FastAPI frontend
+
+The React frontend is a separate Vite application. Keep the backend and frontend
+running in separate terminals:
+
+**Terminal 1 — FastAPI bridge**
+
+```bash
+./venv/bin/python -m uvicorn api.main:app --reload --port 8000
+```
+
+**Terminal 2 — React/Vite frontend**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
+Vite proxies `/api` requests to FastAPI on port 8000. The existing Streamlit
+fallback remains available with `make ui` on port 8501.
+
+Stage 1 connects only Research → loading → Results to the real backend. Latest
+AI, Trends, KPMG Focus, Paper Workspace, feedback, saving, sharing, and other
+prototype areas are not connected to live backend data yet.
+
 ## Scrape new arXiv papers into the vector store
 
 The scraper finds new arXiv papers and stores each paper's abstract in Qdrant,
