@@ -163,8 +163,13 @@ def run_agent(query: str) -> AgentState:
         client.close()
 
 
+def hits_in_context(state: AgentState) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The papers and passages the LLM was given, out of everything the searches returned."""
+    return fit_to_budget(state["paper_hits"], state["chunk_hits"], CONTEXT_TOKENS)
+
+
 def _print_result(state: AgentState):
-    papers, chunks = fit_to_budget(state["paper_hits"], state["chunk_hits"], CONTEXT_TOKENS)
+    papers, chunks = hits_in_context(state)
     print(f"\n===== Answer =====\n{state['answer']}")
     print(f"\n===== Papers given to the LLM ({len(papers)} of {len(state['paper_hits'])} retrieved) =====")
     for hit in papers:

@@ -186,7 +186,8 @@ LLM.
 A blank question raises `ValueError`, a Qdrant failure `RetrievalError`, and an LLM failure or empty answer
 `GenerationError`.
 
-The Streamlit UI (`make ui`) and the API's research endpoint still call the old agent and don't work yet.
+The React frontend uses the agent through the API (section 8). The Streamlit UI (`make ui`) still calls the old
+agent and doesn't work.
 
 ## 7. Run commands without Make
 
@@ -201,8 +202,16 @@ The Make targets are shortcuts for these commands:
 
 ## 8. Run the Stage 1 React/FastAPI frontend
 
-The research endpoint still calls the old agent and fails (see section 6); the rest of this section still
-applies.
+`POST /api/research` runs the agent from section 6, so Ollama must be running and `make ingest` must have
+loaded the vector store. It returns:
+
+- `answer`: the agent's answer (Markdown, with `[Paper Title](https://arxiv.org/abs/<arxiv_id>)` citations).
+- `papers`: the papers the LLM was given (`arxiv_id`, `title`, `abstract`, `url`, `rank`).
+- `retrieved_chunks`: the passages the LLM was given (`paper_id` is the arXiv ID, `title`, `section_title`,
+  `chunk_text`, `chunk_index`, `score`, `url`).
+
+A failed search returns 503 and an LLM failure (for example Ollama not running) 502. Questions are answered one
+at a time, about a minute each; `thread_id` and `focus_areas` are accepted but not used yet.
 
 The React frontend is a separate Vite application. Keep the backend and frontend
 running in separate terminals:
@@ -222,8 +231,8 @@ npm run dev
 ```
 
 Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
-Vite proxies `/api` requests to FastAPI on port 8000. The existing Streamlit
-fallback is started with `make ui` on port 8501.
+Vite proxies `/api` requests to FastAPI on port 8000. The Streamlit fallback (`make ui`, port 8501) still calls
+the old agent and doesn't work.
 
 Stage 1 connects only Research → loading → Results to the real backend. Latest
 AI, Trends, KPMG Focus, Paper Workspace, feedback, saving, sharing, and other
