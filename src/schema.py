@@ -8,7 +8,7 @@ passed into the ingestion pipeline or returned from the search function.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -48,7 +48,7 @@ class Paper(BaseModel):
     )
 
     ingested_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="When this paper's metadata was ingested into our system",
     )
 
