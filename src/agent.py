@@ -8,21 +8,23 @@ from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
 from pydantic import BaseModel, Field
 import re
+import json
+import os
 
 # Ollama's default context is much smaller than what qwen2.5 supports, and
 # anything past it is silently dropped.
-llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=32768)
-small_llm = ChatOllama(model="qwen2.5:1.5b", temperature=0)
+llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=8192, num_predict=1024)
+small_llm = ChatOllama(model="qwen2.5:1.5b", temperature=0, num_predict=256)
 
 # Keeps the sections of all 3 papers, plus the prompt and answer, inside num_ctx.
-MAX_SECTION_CHARS_PER_PAPER = 24_000
+MAX_SECTION_CHARS_PER_PAPER = 6_000
 # So one long section can't use up a paper's whole budget.
 MAX_CHARS_PER_SECTION = MAX_SECTION_CHARS_PER_PAPER // 3
 
 CONCLUSION_TITLE = re.compile(r"conclu", re.IGNORECASE)
 # all-MiniLM-L6-v2 only reads about the first 1000 characters of a text.
 PIECE_CHARS = 1000
-MAX_PIECES_PER_SECTION = 20
+MAX_PIECES_PER_SECTION = 5
 HIGH_CONF = 0.40
 LOW_CONF = 0.20
 #creating the threshold
@@ -169,18 +171,40 @@ def retrieve_vectors(state: AgentState):
         "confidence": confidence,
         "top_score": top_score,
     }
+CACHE_DIR = "./section_cache"
 
+def get_sections_cached(arxiv_id: str):
+    path = os.path.join(CACHE_DIR, arxiv_id + ".json")
+
+    # Already saved: read it instead of calling arXiv.
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+
+    # Not saved yet: fetch from arXiv.
+    sections = fetch_sections(arxiv_id)
+    if not sections:
+        return None
+
+    result = []
+    for section in sections:
+        result.append({"title": section.title, "text": section.text})
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(result, f)
+    return result
 def retrieve_sections(state: AgentState):
     paper_sections = {}
     for arxiv_id in state["document_ids"]:
+        if arxiv_id in paper_sections:
+            continue
         try:
-            sections = fetch_sections(arxiv_id)
+            sections = get_sections_cached(arxiv_id)
         except requests.RequestException:
             continue
         if sections:
-            paper_sections[arxiv_id] = [
-                {"title": section.title, "text": section.text} for section in sections
-            ]
+            paper_sections[arxiv_id] = sections
     return {"paper_sections": paper_sections}
 
 def _embed(texts: list[str]):
@@ -221,8 +245,12 @@ def _format_sections(sections: list[dict], query: str, budget: int = MAX_SECTION
 
 def generate_answer(state: AgentState):
     context = ""
+    seen = []
     for chunk in state["retrieved_chunks"]:
         paper_id = chunk["paper_id"]
+        if paper_id in seen:
+            continue
+        seen.append(paper_id)
         context += f"Title: {chunk['title']} (ID: {paper_id})\n"
         context += f"Abstract: {chunk['chunk_text']}\n"
         context += _format_sections(state["paper_sections"].get(paper_id, []), state["query"])

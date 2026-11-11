@@ -8,3 +8,4 @@ qdrant_data/
 # We no longer store PDFs in git
 data/*.pdf
 frontend/node_modules/
+section_cache/
