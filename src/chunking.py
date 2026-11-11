@@ -19,7 +19,6 @@ import pysbd
 
 from src.arxiv_html import TextBlock
 
-TOKENIZER_MODEL = "nomic-ai/nomic-embed-text-v1.5"  # must match the dense embedding model
 TARGET_TOKENS = 500
 MAX_TOKENS = 600
 OVERLAP_TOKENS = 60
@@ -36,7 +35,6 @@ _MATH = re.compile(r"\$\$.*?\$\$|\$[^$]*\$")
 _MATH_PLACEHOLDER = re.compile(r"MATHSPAN(\d+)X")
 
 _segmenter: pysbd.Segmenter | None = None
-_tokenizer = None
 
 
 @dataclass
@@ -56,14 +54,6 @@ class _Sentence:
     block: TextBlock
     line: int            # line within the block; list items and algorithm lines are separate lines
     paragraph_end: bool  # last sentence of its block
-
-
-def nomic_token_count(text: str) -> int:
-    global _tokenizer
-    if _tokenizer is None:
-        from tokenizers import Tokenizer
-        _tokenizer = Tokenizer.from_pretrained(TOKENIZER_MODEL)
-    return len(_tokenizer.encode(text, add_special_tokens=False).ids)
 
 
 def _split_line(line: str) -> list[str]:
@@ -189,8 +179,9 @@ def chunk_blocks(
     max_tokens: int = MAX_TOKENS,
     overlap_tokens: int = OVERLAP_TOKENS,
 ) -> list[Chunk]:
-    """Chunks for one paper, in reading order. count_tokens defaults to the Nomic tokenizer."""
-    count_tokens = count_tokens or nomic_token_count
+    """Chunks for one paper, in reading order. count_tokens defaults to the dense model's tokenizer."""
+    if count_tokens is None:
+        from src.embeddings import count_tokens  # loads the dense model, so only when it's needed
     chunks: list[Chunk] = []
     for _, section in itertools.groupby(blocks, key=lambda b: b.section_path):
         sentences = _sentences(list(section), count_tokens)

@@ -2,6 +2,7 @@ pydantic
 python-dotenv
 qdrant-client
 sentence-transformers
+fastembed
 langgraph
 langchain-ollama
 langchain-core
