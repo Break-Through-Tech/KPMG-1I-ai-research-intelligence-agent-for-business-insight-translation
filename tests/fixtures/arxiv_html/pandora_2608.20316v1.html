@@ -1,0 +1,97 @@
+<!-- Trimmed excerpt of https://arxiv.org/html/2608.20316v1 for parser tests -->
+<html><body>
+<article class="ltx_document ltx_authors_1line">
+<section class="ltx_section" id="S3">
+<h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">3 </span>The Pandora’s Box Problem</h2>
+<section class="ltx_paragraph" id="S3.SS0.SSS0.Px2">
+<h4 class="ltx_title ltx_title_paragraph">Pandora-NI (non-obligatory inspection).</h4>
+<div class="ltx_para ltx_noindent" id="S3.SS0.SSS0.Px2.p1">
+<p class="ltx_p" id="S3.SS0.SSS0.Px2.p1.1">When inspection is non-obligatory, Pandora may select any unopened box, committing to it without paying the inspection cost, but accepting the risk that its realized value may disappoint <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Doval, 2018</a>)</cite>. The optimal adaptive policy for this variant is NP-hard <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Fu et al., 2023</a>)</cite>, so we use a tractable restriction to <em class="ltx_emph ltx_font_italic" id="S3.SS0.SSS0.Px2.p1.1.1">committing policies</em> <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Beyhaghi and Kleinberg, 2019</a>)</cite>. A committing policy designates a single box <math alttext="m" class="ltx_Math" id="S3.SS0.SSS0.Px2.p1.m1"></math> as “held out”: this box will not be opened, but may be selected as the final choice. The remaining <math alttext="M-1" class="ltx_Math" id="S3.SS0.SSS0.Px2.p1.m2"></math> boxes are searched via Pandora-OI, with the held-out box providing the initial outside option.<span class="ltx_note ltx_role_footnote" id="footnote2"><sup class="ltx_note_mark">2</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup class="ltx_note_mark">2</sup>
+<span class="ltx_tag ltx_tag_note">2</span>
+            The value of the best committing policy that holds out multiple boxes cannot exceed that of the best single-box policy <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Beyhaghi and Kleinberg, 2019</a>)</cite>, so it suffices to evaluate all <math alttext="M" class="ltx_Math" id="footnote2.m1"></math> single-holdout policies, in addition to the obligatory inspection policy (no holdouts). These M + 1 policies are compared by simulating their performance via MC sampling.</span></span></span></p>
+</div>
+</section>
+</section>
+<section class="ltx_section" id="S4">
+<h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">4 </span>Pandora’s Router</h2>
+<section class="ltx_paragraph" id="S4.SS0.SSS0.Px2">
+<h4 class="ltx_title ltx_title_paragraph">Experimental setup.</h4>
+<div class="ltx_para ltx_noindent" id="S4.SS0.SSS0.Px2.p1">
+<p class="ltx_p" id="S4.SS0.SSS0.Px2.p1.1">We evaluate Pandora’s Router on the three domains described in §<a class="ltx_ref"><span class="ltx_text ltx_ref_tag">2.1</span></a>, and compare with the following methods:</p>
+<ul class="ltx_itemize ltx_leftmargin_flush" id="S4.I1">
+<li class="ltx_item" id="S4.I1.i1"><span class="ltx_tag ltx_tag_item">•</span>
+<div class="ltx_para ltx_noindent" id="S4.I1.i1.p1">
+<p class="ltx_p" id="S4.I1.i1.p1.1"><math alttext="{f}" class="ltx_Math" id="S4.I1.i1.p1.m1"></math><span class="ltx_text ltx_font_smallcaps" id="S4.I1.i1.p1.1.1">-only</span>: Route using the cheap estimator <math alttext="f_{m}" class="ltx_Math" id="S4.I1.i1.p1.m2"></math> only (never opening any box).</p>
+</div></li>
+<li class="ltx_item" id="S4.I1.i2"><span class="ltx_tag ltx_tag_item">•</span>
+<div class="ltx_para ltx_noindent" id="S4.I1.i2.p1">
+<p class="ltx_p" id="S4.I1.i2.p1.1"><math alttext="{g}" class="ltx_Math" id="S4.I1.i2.p1.m1"></math><span class="ltx_text ltx_font_smallcaps" id="S4.I1.i2.p1.1.1">-always</span>: Route using the expensive estimator <math alttext="g_{m}" class="ltx_Math" id="S4.I1.i2.p1.m2"></math> only (always opening all boxes).</p>
+</div></li>
+<li class="ltx_item" id="S4.I1.i3"><span class="ltx_tag ltx_tag_item">•</span>
+<div class="ltx_para ltx_noindent" id="S4.I1.i3.p1">
+<p class="ltx_p" id="S4.I1.i3.p1.1"><span class="ltx_text ltx_font_smallcaps" id="S4.I1.i3.p1.1.1">Top-<math alttext="2" class="ltx_Math" id="S4.I1.i3.p1.m1"></math></span>: Always queries <math alttext="g_{m}" class="ltx_Math" id="S4.I1.i3.p1.m2"></math> for the two models with highest <math alttext="f_{m}" class="ltx_Math" id="S4.I1.i3.p1.m3"></math> (open the two expected best boxes).</p>
+</div></li>
+<li class="ltx_item" id="S4.I1.i4"><span class="ltx_tag ltx_tag_item">•</span>
+<div class="ltx_para ltx_noindent" id="S4.I1.i4.p1">
+<p class="ltx_p" id="S4.I1.i4.p1.1"><span class="ltx_text ltx_font_smallcaps" id="S4.I1.i4.p1.1.1">Coin flip</span>: Query <math alttext="g_{m}" class="ltx_Math" id="S4.I1.i4.p1.m1"></math> with probability <math alttext="\frac{1}{2}" class="ltx_Math" id="S4.I1.i4.p1.m2"></math>; route to the maximum observed (randomly open boxes).</p>
+</div></li>
+</ul>
+</div>
+</section>
+</section>
+<section class="ltx_section" id="Sx1">
+<h2 class="ltx_title ltx_title_section">Acknowledgements</h2>
+<div class="ltx_para ltx_noindent" id="Sx1.p1">
+<p class="ltx_p" id="Sx1.p1.1">We thank Alekh Agarwal, Jonathan Berant, and Ian Gemp for helpful research discussions, and Chris Dyer and Artem Sokolov for helpful comments and feedback on the manuscript. This research also benefited from early-stage discussions with Will Dabney.</p>
+</div>
+<div class="ltx_para ltx_noindent" id="Sx1.p2">
+<p class="ltx_p" id="Sx1.p2.1">Alekh Agarwal, Jonathan Berant, Will Dabney, Chris Dyer, Ian Gemp, Artem Sokolov</p>
+</div>
+</section>
+<section class="ltx_appendix" id="A1">
+<h2 class="ltx_title ltx_title_appendix"><span class="ltx_tag ltx_tag_appendix">Appendix A </span>Pandora’s Routing Objective</h2>
+<div class="ltx_proof" id="A1.2">
+<h6 class="ltx_title ltx_runin ltx_font_italic ltx_title_proof">Proof.</h6>
+<div class="ltx_para ltx_noindent" id="A1.p4">
+<p class="ltx_p" id="A1.p4.1"><span class="ltx_text" id="A1.p4.1.1">By admissibility, <math alttext="\widehat{M}" class="ltx_Math" id="A1.p4.m1"></math> and <math alttext="C_{O}" class="ltx_Math" id="A1.p4.m2"></math> are <math alttext="\mathcal{F}_{\tau}" class="ltx_Math" id="A1.p4.m3"></math>-measurable. Hence the tower property gives</span></p>
+<table class="ltx_equation ltx_eqn_table" id="A1.Ex5">
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_eqn_cell ltx_align_center"><math alttext="\mathbb{E}[R_{\widehat{M}}-C_{O}]=\mathbb{E}\!\left[\mathbb{E}[R_{\widehat{M}}\mid\mathcal{F}_{\tau}]-C_{O}\right]." class="ltx_Math" id="A1.Ex5.m1"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td></tr></tbody>
+</table>
+<p class="ltx_p" id="A1.p4.2"><span class="ltx_text" id="A1.p4.2.1">Because <math alttext="\widehat{M}" class="ltx_Math" id="A1.p4.m4"></math> is <math alttext="\mathcal{F}_{\tau}" class="ltx_Math" id="A1.p4.m5"></math>-measurable,</span></p>
+<table class="ltx_equation ltx_eqn_table" id="A1.Ex6">
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_eqn_cell ltx_align_center"><math alttext="\mathbb{E}[R_{\widehat{M}}\mid\mathcal{F}_{\tau}]=\sum_{m=1}^{M}\mathbf{1}\{\widehat{M}=m\}\mathbb{E}[R_{m}\mid\mathcal{F}_{\tau}]." class="ltx_math_unparsed" id="A1.Ex6.m1"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td></tr></tbody>
+</table>
+<p class="ltx_p" id="A1.p4.3"><span class="ltx_text" id="A1.p4.3.1">On the event <math alttext="\{\widehat{M}=m\}" class="ltx_math_unparsed" id="A1.p4.m6"></math>, the specialist <math alttext="m" class="ltx_Math" id="A1.p4.m7"></math> has been opened, so <math alttext="\mathcal{F}_{\tau}" class="ltx_Math" id="A1.p4.m8"></math> contains <math alttext="Z_{m}" class="ltx_Math" id="A1.p4.m9"></math>. The remaining terminal information consists of zero-cost information and signals from other opened specialists, together with decisions that are measurable functions of those observed signals.
+Conditional independence implies that this additional information does not change the posterior mean of <math alttext="R_{m}" class="ltx_Math" id="A1.p4.m10"></math> once <math alttext="(\mathcal{I}_{0},Z_{m})" class="ltx_Math" id="A1.p4.m11"></math> is known. Therefore</span></p>
+<table class="ltx_equation ltx_eqn_table" id="A1.Ex7">
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_eqn_cell ltx_align_center"><math alttext="\mathbb{E}[R_{m}\mid\mathcal{F}_{\tau}]=\mathbb{E}[R_{m}\mid\mathcal{I}_{0},Z_{m}]=G_{m}^{\star}" class="ltx_math_unparsed" id="A1.Ex7.m1"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td></tr></tbody>
+</table>
+<p class="ltx_p" id="A1.p4.4"><span class="ltx_text" id="A1.p4.4.1">on the event that <math alttext="m" class="ltx_Math" id="A1.p4.m12"></math> has been opened. Substituting this into the previous equation yields</span></p>
+<table class="ltx_equation ltx_eqn_table" id="A1.Ex8">
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_eqn_cell ltx_align_center"><math alttext="\mathbb{E}[R_{\widehat{M}}\mid\mathcal{F}_{\tau}]=G_{\widehat{M}}^{\star}," class="ltx_Math" id="A1.Ex8.m1"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td></tr></tbody>
+</table>
+<p class="ltx_p" id="A1.p4.5"><span class="ltx_text" id="A1.p4.5.1">and therefore</span></p>
+<table class="ltx_equation ltx_eqn_table" id="A1.Ex9">
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_eqn_cell ltx_align_center"><math alttext="\mathbb{E}[R_{\widehat{M}}-C_{O}]=\mathbb{E}[G_{\widehat{M}}^{\star}-C_{O}]." class="ltx_Math" id="A1.Ex9.m1"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td></tr></tbody>
+</table>
+<p class="ltx_p" id="A1.p4.6"><span class="ltx_text" id="A1.p4.6.1">∎</span></p>
+</div>
+</div>
+</section>
+</article>
+</body></html>

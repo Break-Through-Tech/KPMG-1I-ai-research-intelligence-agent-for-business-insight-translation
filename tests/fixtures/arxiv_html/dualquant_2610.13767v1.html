@@ -1,0 +1,370 @@
+<!-- Trimmed excerpt of https://arxiv.org/html/2610.13767v1 for parser tests -->
+<html><body>
+<article class="ltx_document ltx_authors_1line">
+<div class="ltx_abstract" id="abstract1"><h6 class="ltx_title ltx_title_abstract">Abstract</h6>
+<p class="ltx_p" id="abstract1.1">Low-bit inference on accelerators with native 4-bit support
+requires quantizing both weights <em class="ltx_emph ltx_font_italic" id="abstract1.1.1">and</em> activations to
+realize the full throughput gains these formats provide.
+While post-training weight quantization has been extensively studied,
+activation quantization remains considerably more challenging
+and typically requires calibration data.
+In this work, we introduce <span class="ltx_text ltx_font_smallcaps" id="abstract1.1.2">DualQuant</span>, a dual-scale, calibration-free
+post-training quantization framework that directly
+minimizes the weight-reconstruction Mean Squared Error (MSE) and,
+as an immediate by-product, yields per-channel activation
+rescalings prior to activation quantization.
+Our key observation is that the scaling factors obtained by minimizing weight-reconstruction error
+also provide effective activation rescalings,
+enabling <span class="ltx_text" id="abstract1.1.3">competitive</span> activation quantization without calibration data.
+We formulate <span class="ltx_text ltx_font_smallcaps" id="abstract1.1.4">DualQuant</span>
+as a non-differentiable weight-reconstruction problem and develop an efficient solver based on variable splitting and block coordinate descent, where each subproblem admits a closed-form update.
+By treating the quantizer as a black box and
+projecting scales onto their <em class="ltx_emph ltx_font_italic" id="abstract1.1.5">format-specific admissible set</em> after
+each update, <span class="ltx_text ltx_font_smallcaps" id="abstract1.1.6">DualQuant</span> provides a unified algorithm supporting a wide range of formats, including INT4, INT8, the full MX family, and NVFP4. To our knowledge, <span class="ltx_text ltx_font_smallcaps" id="abstract1.1.7">DualQuant</span>
+is the first dual-scaling method to formally support MX and NV
+block formats.
+Across Llama and Qwen models evaluated on WikiText-2, C4, and zero-shot downstream tasks, <span class="ltx_text ltx_font_smallcaps" id="abstract1.1.8">DualQuant</span> matches or exceeds the accuracy of calibration-based SmoothQuant across most
+models and formats, and substantially outperforms calibration-free baselines, with particularly large gains for MX and NV block formats.
+We further validate these gains with a real packed W4A4 inference path for Llama-3.1-8B on an RTX 4090. The resulting implementation closely matches the accuracy of fake quantization while delivering up to <math alttext="2.61\times" class="ltx_math_unparsed" id="abstract1.m1"></math> memory reduction and up to <math alttext="2.46\times" class="ltx_math_unparsed" id="abstract1.m2"></math> throughput speedup over BF16.
+Our anonymized codebase is available <a class="ltx_ref ltx_href">here</a>.</p>
+</div>
+<section class="ltx_section" id="S1">
+<h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">1 </span>Introduction</h2>
+<div class="ltx_para ltx_noindent" id="S1.p1">
+<p class="ltx_p" id="S1.p1.1">Large Language Models (LLMs) have grown rapidly in scale, from dense
+models <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Grattafiori et al., 2024</a>; <a class="ltx_ref">Yang et al., 2025</a>)</cite> to
+mixture-of-experts architectures exceeding a trillion
+parameters <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">DeepSeek-AI, 2024</a>; <a class="ltx_ref">Jiang et al., 2024</a>)</cite>,
+placing enormous pressure on memory and compute at inference
+time. Post-Training Quantization (PTQ) addresses this by
+compressing weights, activations, and KV-cache to low-bit
+representations without retraining. Modern accelerators such
+as NVIDIA Blackwell GPUs provide native 4-bit matrix
+multiplication <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Rouhani et al., 2023</a>; <a class="ltx_ref">NVIDIA, 2025</a>)</cite>
+delivering up to <math alttext="4\times" class="ltx_math_unparsed" id="S1.p1.m1"></math> the throughput of FP16, but
+realizing this gain requires <em class="ltx_emph ltx_font_italic" id="S1.p1.1.1">both</em> weights and
+activations in a low-bit format. The central obstacle is that
+activation tensors exhibit systematic large-magnitude outliers
+in specific channels <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Dettmers et al., 2022</a>; <a class="ltx_ref">Bondarenko et al., 2021</a>; <a class="ltx_ref">Sun et al., 2024</a>)</cite> that dominate the
+quantization grid.
+Calibration-based methods address activation quantization effectively but require representative data, introducing distribution sensitivity and data-access overhead prohibitive in privacy-sensitive or on-device settings. This includes both scale-based approaches such as SmoothQuant <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Xiao et al., 2023</a>)</cite> and rotation-based approaches such as SpinQuant <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Liu et al., 2025</a>)</cite>, which optimizes rotation matrices using calibration data. Calibration-free rotation-based methods such as QuaRot <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Ashkboos et al., 2024</a>)</cite> avoid this dependency but do not target activation-quantization error. In other words, no prior method achieves competitive calibration-free joint Weight and Activation (W+A) quantization across modern MX and NV formats.</p>
+</div>
+<div class="ltx_para ltx_noindent" id="S1.p2">
+<p class="ltx_p" id="S1.p2.1"><span class="ltx_text" id="S1.p2.1.1">In this work, we introduce <span class="ltx_text ltx_font_smallcaps" id="S1.p2.1.1.1">DualQuant</span>, a calibration-free
+dual-scale (per-row and per-column) PTQ framework that jointly
+quantizes weights and activations <em class="ltx_emph ltx_font_italic" id="S1.p2.1.1.2">without any access to
+calibration data or activation statistics</em>.
+The key insight is that channels with large-magnitude weight
+columns contribute disproportionately to the layer output and,
+as shown empirically, concentrate activation
+outliers <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Sun et al., 2024</a>; <a class="ltx_ref">Dettmers et al., 2022</a>; <a class="ltx_ref">Bondarenko et al., 2021</a>)</cite>.
+Consequently, the column scales that minimize weight-reconstruction
+MSE attenuate these same channels, so they not only quantize the
+weights well but also implicitly define activation rescalings
+that we observe to substantially improve activation
+quantization—playing a role similar to SmoothQuant’s
+calibrated scales <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Xiao et al., 2023</a>)</cite>, yet derived from
+weights alone.
+<span class="ltx_text ltx_font_smallcaps" id="S1.p2.1.1.3">DualQuant</span> obtains these row and column scales via Block Coordinate
+Descent (BCD) with closed-form updates and provable convergence
+guarantees <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Tseng, 2001</a>; <a class="ltx_ref">Razaviyayn et al., 2013</a>)</cite>,
+treating the quantizer as a black-box operator and projecting
+scales to their admissible format set after each update,
+yielding a single unified algorithm that operates across INT4, MXINT4, MXFP4, and NVFP4. Evaluation on Qwen and Llama families confirms that <span class="ltx_text ltx_font_smallcaps" id="S1.p2.1.1.4">DualQuant</span>
+matches or surpasses SmoothQuant on W+A quantization across most
+formats and models, without any calibration data.</span> Our main contributions are:</p>
+<ol class="ltx_enumerate ltx_leftmargin_flush" id="S1.I1">
+<li class="ltx_item" id="S1.I1.i1"><span class="ltx_tag ltx_tag_item">1.</span>
+<div class="ltx_para ltx_noindent" id="S1.I1.i1.p1">
+<p class="ltx_p" id="S1.I1.i1.p1.1">We formalize dual-scale weight quantization as a
+constrained non-convex optimization problem and solve it via
+BCD with closed-form per-coordinate updates, format-aware
+scale projection, and provable convergence guarantees,
+requiring no inner loop, no Hessian, and no calibration
+data. The same algorithm operates uniformly across INT4,
+MXINT4, MXFP4, and NVFP4, making <span class="ltx_text ltx_font_smallcaps" id="S1.I1.i1.p1.1.1">DualQuant</span> the first
+dual-scaling method that formally supports the full MX and NV
+formats.</p>
+</div></li>
+<li class="ltx_item" id="S1.I1.i2"><span class="ltx_tag ltx_tag_item">2.</span>
+<div class="ltx_para ltx_noindent" id="S1.I1.i2.p1">
+<p class="ltx_p" id="S1.I1.i2.p1.1"><span class="ltx_text" id="S1.I1.i2.p1.1.1">We show that the column scales obtained from weight MSE minimization also serve as effective activation rescalings, enabling joint W+A quantization without any access to calibration data. Across Qwen and Llama families and four 4-bit formats, <span class="ltx_text ltx_font_smallcaps" id="S1.I1.i2.p1.1.1.1">DualQuant</span> closely matches or surpasses
+calibration-based SmoothQuant and significantly outperforms calibration-free baselines QuaRot and SINQ+, with especially large margins on MX and NV block data formats.</span></p>
+</div></li>
+<li class="ltx_item" id="S1.I1.i3"><span class="ltx_tag ltx_tag_item">3.</span>
+<div class="ltx_para ltx_noindent" id="S1.I1.i3.p1">
+<p class="ltx_p" id="S1.I1.i3.p1.1">We validate <span class="ltx_text ltx_font_smallcaps" id="S1.I1.i3.p1.1.1">DualQuant</span> through a real packed W4A4 deployment of Llama-3.1-8B on an RTX 4090. The packed implementation matches fake-quantization accuracy to within <math alttext="0.01" class="ltx_Math" id="S1.I1.i3.p1.m1"></math> perplexity on WikiText-2 while reducing memory usage by <math alttext="2.51" class="ltx_Math" id="S1.I1.i3.p1.m2"></math>–<math alttext="2.61\times" class="ltx_math_unparsed" id="S1.I1.i3.p1.m3"></math> and improving end-to-end speed by <math alttext="1.39" class="ltx_Math" id="S1.I1.i3.p1.m4"></math>–<math alttext="2.46\times" class="ltx_math_unparsed" id="S1.I1.i3.p1.m5"></math> over BF16. Incorporating the scales into the activation-quantization kernel avoids additional kernel launches and limits the quantization overhead to <math alttext="4.3" class="ltx_Math" id="S1.I1.i3.p1.m6"></math>-<math alttext="6.1\%" class="ltx_Math" id="S1.I1.i3.p1.m7"></math> of total GPU time.</p>
+</div></li>
+</ol>
+</div>
+</section>
+<section class="ltx_section" id="S2">
+<h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">2 </span>Background and related work</h2>
+<section class="ltx_subsection" id="S2.SS2">
+<h3 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">2.2 </span>Activation quantization</h3>
+<figure class="ltx_figure" id="S2.F1"><img class="ltx_graphics ltx_centering ltx_img_landscape" id="S2.F1.g1" src="2610.13767v1/single_vs_dual_scale.png"/>
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure">Figure 1: </span><span class="ltx_text ltx_font_bold" id="S2.F1.8">Per-element quantization error <math alttext="\scriptstyle|\mathbf{W}-\hat{\mathbf{W}}|" class="ltx_Math" id="S2.F1.m6"></math> under different scale designs.</span>
+Each panel reports the
+MSE ratio (<math alttext="\uparrow" class="ltx_Math" id="S2.F1.m7"></math>) relative to single-scale and the
+matrix imbalance (SINQ’s objective). <span class="ltx_text" id="S2.F1.9"><span class="ltx_text ltx_font_bold" id="S2.F1.9.1">(a)</span> Original</span>
+weight tile. <span class="ltx_text ltx_font_bold" id="S2.F1.10">(b)</span> Single-scale: one outlier inflates
+the entire row. <span class="ltx_text ltx_font_bold" id="S2.F1.11">(c)</span> SINQ minimizes matrix imbalance
+(<math alttext="1.65" class="ltx_Math" id="S2.F1.m8"></math>) but achieves only <math alttext="3.32\times" class="ltx_math_unparsed" id="S2.F1.m9"></math> MSE reduction.
+<span class="ltx_text ltx_font_bold" id="S2.F1.12">(d)</span> <span class="ltx_text ltx_font_smallcaps" id="S2.F1.13">DualQuant</span> minimizes MSE, achieving
+<math alttext="12.54\times" class="ltx_math_unparsed" id="S2.F1.m10"></math> reduction, illustrating that low imbalance does not imply low
+reconstruction error.
+</figcaption>
+</figure>
+</section>
+</section>
+<section class="ltx_section" id="S4">
+<h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">4 </span>Methodology</h2>
+<section class="ltx_subsection" id="S4.SS1">
+<h3 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">4.1 </span>Problem description</h3>
+<div class="ltx_para ltx_noindent" id="S4.SS1.p1">
+<p class="ltx_p" id="S4.SS1.p1.1">For a linear layer computing <math alttext="\mathbf{X}\mathbf{W}^{\top}" class="ltx_Math" id="S4.SS1.p1.m1"></math> with activation matrix <math alttext="\mathbf{X}\in\mathbb{R}^{b\times n}" class="ltx_Math" id="S4.SS1.p1.m2"></math> and
+weight matrix <math alttext="\mathbf{W}\in\mathbb{R}^{m\times n}" class="ltx_Math" id="S4.SS1.p1.m3"></math>, the joint W+A quantization error can be written as</p>
+<table class="ltx_equation ltx_eqn_table" id="S4.E1">
+<tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_eqn_cell ltx_align_center"><math alttext="\textstyle\mathbf{X}\mathbf{W}^{\top}-Q(\mathbf{X})\,Q(\mathbf{W})^{\top}=(\mathbf{X}-Q(\mathbf{X}))\mathbf{W}^{\top}+Q(\mathbf{X})(\mathbf{W}-Q(\mathbf{W}))^{\top}," class="ltx_Math" id="S4.E1.m1"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+<td class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right" rowspan="1"><span class="ltx_tag ltx_tag_equation ltx_align_right">(1)</span></td></tr></tbody>
+</table>
+<p class="ltx_p" id="S4.SS1.p1.2">where the activation error is amplified by <math alttext="\mathbf{W}^{\top}" class="ltx_Math" id="S4.SS1.p1.m4"></math> and the weight error is amplified by <math alttext="Q(\mathbf{X})" class="ltx_Math" id="S4.SS1.p1.m5"></math>. Minimizing the two terms independently does not necessarily minimize the joint error, and minimizing equation <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a> directly is intractable without calibration data on <math alttext="\mathbf{X}" class="ltx_Math" id="S4.SS1.p1.m6"></math>. SmoothQuant <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Xiao et al., 2023</a>)</cite> targets this joint problem by collecting per-channel activation statistics from a calibration dataset to construct a per-channel rescaling applied prior to quantization, <math alttext="\mathbf{X}\mathbf{W}^{\top}=(\mathbf{X}\,\mathrm{Diag}(\mathbf{s})^{-1})(\mathbf{W}\,\mathrm{Diag}(\mathbf{s}))^{\top}" class="ltx_Math" id="S4.SS1.p1.m7"></math>. We take a different approach: rather than collecting activation statistics from data, we show that the column scales obtained from minimizing the <em class="ltx_emph ltx_font_italic" id="S4.SS1.p1.2.1">weight</em> reconstruction MSE on static weights implicitly perform a per-channel rescaling of the same form, without any access to <math alttext="\mathbf{X}" class="ltx_Math" id="S4.SS1.p1.m8"></math>, as developed next.</p>
+</div>
+</section>
+<section class="ltx_subsection" id="S4.SS2">
+<h3 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">4.2 </span>Dual-scale parameterization and the activation
+factorization</h3>
+<section class="ltx_paragraph" id="S4.SS2.SSS0.Px1">
+<h4 class="ltx_title ltx_title_paragraph">Column scales as activation rescalings.</h4>
+<figure class="ltx_float ltx_float_algorithm ltx_framed ltx_framed_top" id="alg1">
+<figcaption class="ltx_caption"><span class="ltx_tag ltx_tag_float"><span class="ltx_text ltx_font_bold" id="alg1.4">Algorithm 1</span> </span> <span class="ltx_text ltx_font_smallcaps" id="alg1.5">DualQuant</span>: Dual-Scale Quantization via Coordinate
+Descent</figcaption>
+<div class="ltx_listing ltx_framed ltx_framed_topbottom ltx_listing" id="alg1.6">
+<div class="ltx_listingline" id="alg1.l1">
+<span class="ltx_tag ltx_tag_listingline">1:</span>
+              Weight tile <math alttext="\mathbf{W}" class="ltx_Math" id="alg1.l1.m1"></math>,
+quantizer <math alttext="Q(\cdot)" class="ltx_Math" id="alg1.l1.m2"></math>, admissible sets <math alttext="\mathbb{F}_{\alpha}^{m}" class="ltx_Math" id="alg1.l1.m3"></math>,
+<math alttext="\mathbb{F}_{\beta}^{n}" class="ltx_Math" id="alg1.l1.m4"></math>, number of iterations <math alttext="T" class="ltx_Math" id="alg1.l1.m5"></math>,
+initialization <math alttext="(\bm{\alpha}_{0},\bm{\beta}_{0})" class="ltx_Math" id="alg1.l1.m6"></math>
+</div>
+<div class="ltx_listingline" id="alg1.l2">
+<span class="ltx_tag ltx_tag_listingline">2:</span>
+<math alttext="\bm{\alpha}\leftarrow\bm{\alpha}_{0}" class="ltx_Math" id="alg1.l2.m1"></math>,
+ <math alttext="\bm{\beta}\leftarrow\bm{\beta}_{0}" class="ltx_Math" id="alg1.l2.m2"></math>
+</div>
+<div class="ltx_listingline" id="alg1.l3">
+<span class="ltx_tag ltx_tag_listingline">3:</span>
+<span class="ltx_text ltx_font_bold" id="alg1.l3.2">for</span> <math alttext="t=1,\ldots,T" class="ltx_Math" id="alg1.l3.m1"></math> <span class="ltx_text ltx_font_bold" id="alg1.l3.3">do</span>
+</div>
+<div class="ltx_listingline" id="alg1.l4">
+<span class="ltx_tag ltx_tag_listingline">4:</span>
+                <math alttext="\hat{\mathbf{Q}}\leftarrow Q\!\left(\mathrm{Diag}(\bm{\alpha})\,\mathbf{W}\,\mathrm{Diag}(\bm{\beta})\right)" class="ltx_Math" id="alg1.l4.m1"></math>
+</div>
+</div>
+<br class="ltx_break ltx_break"/><span class="ltx_rule"> </span>
+<br class="ltx_break ltx_break"/>
+<p class="ltx_p" id="alg1.7"><span class="ltx_text ltx_font_bold" id="alg1.7.1">Notation:</span>
+<math alttext="\|\cdot\|_{2,\mathrm{row}}^{2}" class="ltx_math_unparsed" id="alg1.m1"></math> and
+<math alttext="\|\cdot\|_{2,\mathrm{col}}^{2}" class="ltx_math_unparsed" id="alg1.m2"></math>: squared <math alttext="\ell_{2}" class="ltx_Math" id="alg1.m3"></math>-norm
+along each row and column;
+<math alttext="\oslash" class="ltx_Math" id="alg1.m4"></math>: element-wise division;
+<math alttext="\odot" class="ltx_Math" id="alg1.m5"></math>: element-wise multiplication;
+<math alttext="(\cdot)^{\odot-1}" class="ltx_Math" id="alg1.m6"></math>: element-wise inverse;
+<math alttext="\Pi_{\mathbb{F}}" class="ltx_Math" id="alg1.m7"></math>: projection to nearest value in <math alttext="\mathbb{F}" class="ltx_Math" id="alg1.m8"></math>.</p>
+</figure>
+</section>
+</section>
+<section class="ltx_subsection" id="S4.SS3">
+<h3 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">4.3 </span>MSE optimization via block coordinate descent</h3>
+<section class="ltx_paragraph" id="S4.SS3.SSS0.Px1">
+<h4 class="ltx_title ltx_title_paragraph">Variable splitting.</h4>
+<div class="ltx_para ltx_noindent" id="S4.SS3.SSS0.Px1.p1">
+<p class="ltx_p" id="S4.SS3.SSS0.Px1.p1.2">To tackle equation <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">4</span></a>, we duplicate each scale into inner copies controlling grid assignment and outer copies controlling reconstruction <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Boyd et al., 2011</a>)</cite>, yielding</p>
+<table class="ltx_equationgroup ltx_eqn_table" id="S4.E5">
+<tbody>
+<tr class="ltx_equation ltx_eqn_row ltx_align_baseline" id="S4.E5X">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_td ltx_align_right ltx_eqn_cell"><math alttext="\displaystyle\min_{\begin{subarray}{c}\bm{\alpha}_{\mathrm{in}},\,\bm{\beta}_{\mathrm{in}},\bm{\alpha}_{\mathrm{out}},\,\bm{\beta}_{\mathrm{out}}\end{subarray}}" class="ltx_Math" id="S4.E5X.m2"></math></td>
+<td class="ltx_td ltx_align_left ltx_eqn_cell"><math alttext="\displaystyle\left\|\mathbf{W}-\mathrm{Diag}(\bm{\alpha}_{\mathrm{out}})^{-1}\,\hat{\mathbf{Q}}_{\bm{\alpha}_{\mathrm{in}},\bm{\beta}_{\mathrm{in}}}\,\mathrm{Diag}(\bm{\beta}_{\mathrm{out}})^{-1}\right\|_{F}^{2}" class="ltx_Math" id="S4.E5X.m3"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+<td class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right" rowspan="2"><span class="ltx_tag ltx_tag_equationgroup ltx_align_right">(5)</span></td></tr>
+<tr class="ltx_equation ltx_eqn_row ltx_align_baseline" id="S4.E5Xa">
+<td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+<td class="ltx_td ltx_align_right ltx_eqn_cell"><math alttext="\displaystyle\text{s.t.}" class="ltx_Math" id="S4.E5Xa.m2"></math></td>
+<td class="ltx_td ltx_align_left ltx_eqn_cell"><math alttext="\displaystyle\bm{\alpha}_{\mathrm{in}}=\bm{\alpha}_{\mathrm{out}},\;\;\bm{\beta}_{\mathrm{in}}=\bm{\beta}_{\mathrm{out}},\;\;\bm{\alpha}_{\mathrm{out}}^{\odot-1}\in\mathbb{F}_{\alpha}^{m},\;\;\bm{\beta}_{\mathrm{out}}^{\odot-1}\in\mathbb{F}_{\beta}^{n}." class="ltx_Math" id="S4.E5Xa.m3"></math></td>
+<td class="ltx_eqn_cell ltx_eqn_center_padright"></td></tr></tbody>
+</table>
+<p class="ltx_p" id="S4.SS3.SSS0.Px1.p1.3">With the inner copies fixed, <math alttext="\hat{\mathbf{Q}}_{\bm{\alpha}_{\mathrm{in}},\bm{\beta}_{\mathrm{in}}}" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m1"></math> is a constant matrix and the objective becomes bilinear in <math alttext="\bm{\alpha}_{\mathrm{out}}^{\odot-1}" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m2"></math> and <math alttext="\bm{\beta}_{\mathrm{out}}^{\odot-1}" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m3"></math>, decoupling into <math alttext="m" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m4"></math> independent scalar subproblems over <math alttext="\bm{\alpha}" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m5"></math> and <math alttext="n" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m6"></math> over <math alttext="\bm{\beta}" class="ltx_Math" id="S4.SS3.SSS0.Px1.p1.m7"></math>. A block coordinate descent algorithm is then used <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Tseng, 2001</a>; <a class="ltx_ref">Razaviyayn et al., 2013</a>)</cite> to alternate between updating the outer scales (in closed form) and re-synchronizing the inner copies (Appendix <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">A.2</span></a>).</p>
+</div>
+</section>
+<section class="ltx_paragraph" id="S4.SS3.SSS0.Px3">
+<h4 class="ltx_title ltx_title_paragraph">Convergence analysis.</h4>
+<div class="ltx_theorem ltx_theorem_assumption" id="Thmassumption1">
+<h6 class="ltx_title ltx_runin ltx_title_theorem"><span class="ltx_tag ltx_tag_theorem"><span class="ltx_text ltx_font_bold" id="Thmassumption1.2">Assumption 1</span></span><span class="ltx_text ltx_font_bold" id="Thmassumption1.3"> </span>(Non-degenerate quantization)<span class="ltx_text ltx_font_bold" id="Thmassumption1.4">.</span></h6>
+<div class="ltx_para ltx_noindent" id="Thmassumption1.p1">
+<p class="ltx_p" id="Thmassumption1.p1.1"><span class="ltx_text ltx_font_italic" id="Thmassumption1.p1.1.1">For all iterations <math alttext="t" class="ltx_Math" id="Thmassumption1.p1.m1"></math> and rows <math alttext="i" class="ltx_Math" id="Thmassumption1.p1.m2"></math>, no row of
+<math alttext="\mathrm{Diag}(\bm{\alpha}^{(t)})\mathbf{W}\mathrm{Diag}(\bm{\beta}^{(t)})" class="ltx_Math" id="Thmassumption1.p1.m3"></math> is mapped entirely
+to zero by <math alttext="Q(\cdot)" class="ltx_Math" id="Thmassumption1.p1.m4"></math>. This holds generically since LLM weight
+rows follow near-Gaussian distributions with non-negligible
+<math alttext="\ell_{2}" class="ltx_Math" id="Thmassumption1.p1.m5"></math> norm <cite class="ltx_cite ltx_citemacro_citep">(<a class="ltx_ref">Dettmers et al., 2023</a>)</cite>. In the
+degenerate case <math alttext="\hat{\mathbf{Q}}_{i,:}=\mathbf{0}" class="ltx_math_unparsed" id="Thmassumption1.p1.m6"></math>, the scale
+<math alttext="\alpha_{i}" class="ltx_Math" id="Thmassumption1.p1.m7"></math> does not affect the objective and is set to <math alttext="1" class="ltx_Math" id="Thmassumption1.p1.m8"></math> by convention.</span></p>
+</div>
+</div>
+</section>
+</section>
+</section>
+<section class="ltx_section" id="S5">
+<h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">5 </span>Experiments</h2>
+<section class="ltx_subsection" id="S5.SS1">
+<h3 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">5.1 </span>Joint weight-and-activation quantization</h3>
+<div class="ltx_para ltx_noindent" id="S5.SS1.p2">
+<p class="ltx_p" id="S5.SS1.p2.1">Table <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a> reports joint W+A quantization
+perplexity on the Llama family across four 4-bit formats.
+<span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.1">DualQuant</span> consistently matches or surpasses the
+calibration-based
+SmoothQuant, while requiring no calibration data. On MXFP4, <span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.2">DualQuant</span> improves over SmoothQuant on WikiText-2 for all three models, substantially on Llama-2-7B and Llama-3.2-1B and narrowly on Llama-3.1-8B; on C4 the same holds except for Llama-3.1-8B, where <span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.3">DualQuant</span> trails slightly. On MXINT4, <span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.4">DualQuant</span> is better than SmoothQuant across both WikiText-2 and C4 for all three models. On INT4, <span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.5">DualQuant</span> surpasses both SmoothQuant and
+AWQ+ across all models, demonstrating that weight-derived
+scales provide effective activation rescaling even on the
+standard integer format. On NVFP4, <span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.6">DualQuant</span> achieves the
+strongest results among all methods on Llama-3.1-8B and Llama-3.2-1B, with the same overall trend on C4.
+In contrast, both calibration-free baselines degrade substantially on MX and NV
+formats: SINQ+ degrades on MXINT4 and MXFP4
+and diverges completely on NVFP4, as its format-unaware scales fall outside the FP8 representable range; QuaRot similarly diverges on NVFP4 and degrades substantially on MX formats,
+as its Hadamard rotation redistributes activation magnitude in a way
+incompatible with block floating-point scaling. <span class="ltx_text ltx_font_smallcaps" id="S5.SS1.p2.1.7">DualQuant</span> avoids both failure modes by
+design, incorporating format constraints directly into the optimization and requiring no
+rotation or calibration data. Corresponding results on the Qwen family
+(Table <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">7</span></a>, Appendix <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">G</span></a>)
+show consistent trends.<span class="ltx_note ltx_role_footnote" id="footnote1"><sup class="ltx_note_mark">1</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup class="ltx_note_mark">1</sup>
+<span class="ltx_tag ltx_tag_note">1</span>
+            The <span class="ltx_text ltx_font_smallcaps" id="footnote1.2">DualQuant</span>–SINQ+ gap persists without our extensions: in SINQ’s native weight-only INT4 setting, <span class="ltx_text ltx_font_smallcaps" id="footnote1.3">DualQuant</span> is more accurate on three of four models (Appendix <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">H</span></a>), so it stems from the <em class="ltx_emph ltx_font_italic" id="footnote1.4">objective</em> itself.</span></span></span></p>
+</div>
+<figure class="ltx_table" id="S5.T2">
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_table">Table 2: </span>Llama-3.1-8B downstream accuracy (0-shot, %, higher is better <math alttext="\uparrow" class="ltx_Math" id="S5.T2.m2"></math>)
+for RTN, AWQ+, SmoothQuant, SINQ+, <span class="ltx_text ltx_font_smallcaps" id="S5.T2.6">DualQuant</span>, and QuaRot, across all four evaluated formats; QuaRot is omitted entirely for NVFP4, since QuaRot’s Hadamard rotation redistributes activation magnitude in a way that collapses NVFP4’s narrow-range E4M3 block scale. <span class="ltx_text ltx_font_bold" id="S5.T2.7">Bold</span>: best calibration-free (CF) result per column within each model+format block. <span class="ltx_text" id="S5.T2.8">✓</span>: calibration-free. <span class="ltx_text" id="S5.T2.9">✗</span>: requires calibration data.</figcaption>
+<table class="ltx_tabular ltx_centering ltx_guessed_headers ltx_align_middle" id="S5.T2.10">
+<thead class="ltx_thead">
+<tr class="ltx_tr" id="S5.T2.10.1">
+<th class="ltx_td ltx_align_center ltx_th ltx_th_row ltx_border_tt" colspan="8" id="S5.T2.10.1.1"><span class="ltx_text ltx_font_bold" id="S5.T2.10.1.1.1">Llama-3.1-8B</span></th></tr>
+</thead>
+<tbody class="ltx_tbody">
+<tr class="ltx_tr" id="S5.T2.10.2">
+<th class="ltx_td ltx_align_left ltx_th ltx_th_row ltx_border_t" id="S5.T2.10.2.1">Format</th>
+<th class="ltx_td ltx_align_left ltx_th ltx_th_row ltx_border_t" id="S5.T2.10.2.2">Method</th>
+<th class="ltx_td ltx_align_center ltx_th ltx_th_row ltx_border_t" id="S5.T2.10.2.3">CF</th>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.2.4">MMLU</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.2.5">HellaSwag</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.2.6">PIQA</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.2.7">ARC-Easy</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.2.8">WinoGrande</td></tr>
+<tr class="ltx_tr" id="S5.T2.10.3">
+<th class="ltx_td ltx_align_left ltx_th ltx_th_row ltx_border_t" id="S5.T2.10.3.1" rowspan="6"><span class="ltx_text" id="S5.T2.10.3.1.1">INT4 (G=64)</span></th>
+<th class="ltx_td ltx_align_left ltx_th ltx_th_row ltx_border_t" id="S5.T2.10.3.2">RTN</th>
+<th class="ltx_td ltx_align_center ltx_th ltx_th_row ltx_border_t" id="S5.T2.10.3.3"><span class="ltx_text" id="S5.T2.10.3.3.1">✓</span></th>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.3.4">54.89</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.3.5">56.44</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.3.6"><span class="ltx_text ltx_font_bold" id="S5.T2.10.3.6.1">77.86</span></td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.3.7">77.40</td>
+<td class="ltx_td ltx_align_right ltx_border_t" id="S5.T2.10.3.8">68.90</td></tr>
+<tr class="ltx_tr" id="S5.T2.10.4">
+<th class="ltx_td ltx_align_left ltx_th ltx_th_row" id="S5.T2.10.4.1">AWQ+</th>
+<th class="ltx_td ltx_align_center ltx_th ltx_th_row" id="S5.T2.10.4.2"><span class="ltx_text" id="S5.T2.10.4.2.1">✗</span></th>
+<td class="ltx_td ltx_align_right" id="S5.T2.10.4.3">55.78</td>
+<td class="ltx_td ltx_align_right" id="S5.T2.10.4.4">56.65</td>
+<td class="ltx_td ltx_align_right" id="S5.T2.10.4.5">78.51</td>
+<td class="ltx_td ltx_align_right" id="S5.T2.10.4.6">77.19</td>
+<td class="ltx_td ltx_align_right" id="S5.T2.10.4.7">69.06</td></tr>
+</tbody>
+</table>
+</figure>
+</section>
+</section>
+<section class="ltx_bibliography" id="bib">
+<h2 class="ltx_title ltx_title_bibliography">References</h2>
+<ul class="ltx_biblist" id="bib.L1">
+<li class="ltx_bibitem ltx_bib_inproceedings" id="bib.bib20"><span class="ltx_tag ltx_bib_author-year ltx_role_refnum ltx_tag_bibitem">Ashkboos <span class="ltx_text ltx_bib_etal">et al.</span> (2024)</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_author">S. Ashkboos, A. Mohtashami, M. L. Croci, B. Li, P. Cameron, M. Jaggi, D. Alistarh, T. Hoefler, and J. Hensman</span>
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_title">QuaRot: outlier-free 4-bit inference in rotated LLMs</span>.
+</span>
+<span class="ltx_bibblock">In <span class="ltx_text ltx_bib_inbook">Advances in Neural Information Processing Systems (NeurIPS)</span>,
+</span>
+<span class="ltx_bibblock ltx_bib_cited">Cited by: <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">5th item</span></a>,
+<a class="ltx_ref"><span class="ltx_text ltx_ref_tag">§1</span></a>,
+<a class="ltx_ref"><span class="ltx_text ltx_ref_tag">§2.2</span></a>,
+<a class="ltx_ref"><span class="ltx_text ltx_ref_tag">§5.1</span></a>.
+</span></li>
+<li class="ltx_bibitem ltx_bib_misc" id="bib.bib10"><span class="ltx_tag ltx_bib_author-year ltx_role_refnum ltx_tag_bibitem">Badri and Shaji (2023)</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_author">H. Badri and A. Shaji</span>
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_title">Half-quadratic quantization of large machine learning models</span>.
+</span>
+<span class="ltx_bibblock">Note: <span class="ltx_text ltx_bib_note"><a class="ltx_ref ltx_url ltx_font_typewriter">https://dropbox.github.io/hqq_blog/</a></span>
+</span>
+<span class="ltx_bibblock ltx_bib_cited">Cited by: <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">§2.1</span></a>.
+</span></li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</ul>
+</section>
+<section class="ltx_appendix" id="A3">
+<h2 class="ltx_title ltx_title_appendix"><span class="ltx_tag ltx_tag_appendix">Appendix C </span>Proof of Theorem <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a>.</h2>
+<div class="ltx_proof" id="A3.2">
+<h6 class="ltx_title ltx_runin ltx_font_italic ltx_title_proof">Proof.</h6>
+<div class="ltx_para" id="A3.p2">
+<p class="ltx_p" id="A3.p2.1"><span class="ltx_text" id="A3.p2.1.1">The objective decomposes across rows as
+<math alttext="g(\bm{\alpha},\bm{\beta})=\sum_{i=1}^{m}\|\alpha_{i}^{-1}\mathbf{R}_{i,:}-\mathbf{W}_{i,:}\|_{2}^{2}" class="ltx_math_unparsed" id="A3.p2.m1"></math>, where <math alttext="\mathbf{R}_{i,:}=\hat{\mathbf{Q}}^{(T)}_{i,:}\mathrm{Diag}(\bm{\beta})^{-1}" class="ltx_math_unparsed" id="A3.p2.m2"></math>.
+Substituting <math alttext="u_{i}=\alpha_{i}^{-1}" class="ltx_Math" id="A3.p2.m3"></math> yields a strictly convex
+quadratic in <math alttext="u_{i}" class="ltx_Math" id="A3.p2.m4"></math> with unique minimizer
+<math alttext="u_{i}^{*}=\mathbf{W}_{i,:}\,\mathbf{R}_{i,:}^{\top}/\|\mathbf{R}_{i,:}\|_{2}^{2}" class="ltx_math_unparsed" id="A3.p2.m5"></math>, which is positive under
+Assumption <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a>. Specifically, Assumption <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">1</span></a> ensures <math alttext="\|\mathbf{R}_{i,:}\|_{2}^{2}&gt;0" class="ltx_math_unparsed" id="A3.p2.m6"></math> (non-zero denominator). The numerator <math alttext="\mathbf{W}_{i,:}\,\mathbf{R}_{i,:}^{\top}" class="ltx_math_unparsed" id="A3.p2.m7"></math> is positive because all quantization formats considered use sign-preserving quantizers, meaning <math alttext="Q(x)" class="ltx_Math" id="A3.p2.m8"></math> and <math alttext="x" class="ltx_Math" id="A3.p2.m9"></math> share the same sign for any nonzero <math alttext="x" class="ltx_Math" id="A3.p2.m10"></math>. Since <math alttext="\alpha_{i},\beta_{j}&gt;0" class="ltx_Math" id="A3.p2.m11"></math>, it follows that <math alttext="W_{i,k}" class="ltx_Math" id="A3.p2.m12"></math> and <math alttext="R_{i,k}" class="ltx_Math" id="A3.p2.m13"></math> share the same sign for all <math alttext="k" class="ltx_Math" id="A3.p2.m14"></math>, making the inner product strictly positive. Therefore <math alttext="\alpha_{i}^{*}=1/u_{i}^{*}\in\mathbb{R}_{+}" class="ltx_Math" id="A3.p2.m15"></math> is the unique minimizer.
+∎</span></p>
+</div>
+</div>
+</section>
+</article>
+</body></html>
