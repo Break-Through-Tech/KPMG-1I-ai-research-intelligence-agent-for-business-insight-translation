@@ -1,8 +1,6 @@
 """
 Metadata schema for our project 
 - `Paper` describes one research paper's metadata (one row/object per paper).
-- `Chunk` describes one piece of a paper's text, ready to be embedded and
-  stored in Qdrant. Each Chunk links back to its parent Paper via `paper_id`.
 
 Anyone on the team can import these classes to validate data before it's
 passed into the ingestion pipeline or returned from the search function.
@@ -70,48 +68,6 @@ class Paper(BaseModel):
         return v
 
 
-class Chunk(BaseModel):
-    """A single chunk of text from a paper, ready to be embedded and stored."""
-
-    chunk_id: str = Field(
-        ..., description="Unique chunk identifier, e.g. '2609.24974_chunk_0'"
-    )
-
-    paper_id: str = Field(..., description="Foreign key back to Paper.paper_id")
-
-    chunk_text: str = Field(..., description="The actual text of this chunk")
-
-    chunk_index: int = Field(
-        ..., ge=0, description="Position of this chunk within the paper (0-indexed)"
-    )
-
-    page_number: Optional[int] = Field(
-        default=None, description="Page number this chunk came from, if known"
-    )
-
-    section_title: Optional[str] = Field(
-        default=None,
-        description="Paper section this chunk came from, e.g. 'Abstract' or 'Introduction'",
-    )
-
-    embedding_model: Optional[str] = Field(
-        default=None,
-        description="Name of the embedding model used, e.g. 'all-MiniLM-L6-v2'",
-    )
-
-    created_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        description="When this chunk was created/embedded",
-    )
-
-    @field_validator("chunk_text")
-    @classmethod
-    def chunk_text_not_empty(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("chunk_text must not be empty")
-        return v
-
-
 if __name__ == "__main__":
     sample_paper = Paper(
         paper_id="2609.24974",
@@ -123,12 +79,3 @@ if __name__ == "__main__":
         pdf_url="https://arxiv.org/pdf/2609.24974",
     )
     print(sample_paper.model_dump_json(indent=2))
-
-    sample_chunk = Chunk(
-        chunk_id="2609.24974_chunk_0",
-        paper_id="2609.24974",
-        chunk_text=sample_paper.abstract,
-        chunk_index=0,
-        embedding_model="all-MiniLM-L6-v2",
-    )
-    print(sample_chunk.model_dump_json(indent=2))

@@ -3,13 +3,10 @@
 - Dense: Nomic Embed Text v1.5 (768 dimensions), run locally through fastembed.
 - Sparse: BM25 through fastembed. It only produces term frequencies; the Qdrant collection
   must apply IDF to its sparse vector.
-
-The MiniLM model below still backs the old `papers` collection and the agent until they move over.
 """
 
 from fastembed import SparseTextEmbedding, TextEmbedding
 from qdrant_client.models import SparseVector
-from sentence_transformers import SentenceTransformer
 
 DENSE_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 DENSE_VECTOR_SIZE = 768
@@ -18,23 +15,8 @@ DOCUMENT_PREFIX = "search_document: "
 DENSE_BATCH_SIZE = 8
 SPARSE_MODEL_NAME = "Qdrant/bm25"
 
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-
-_model = None
 _dense_model: TextEmbedding | None = None
 _sparse_model: SparseTextEmbedding | None = None
-
-
-def get_model():
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    return _model
-
-
-def embed_chunks(chunks: list[str]):
-    model = get_model()
-    return model.encode(chunks, show_progress_bar=False).tolist()
 
 
 def get_dense_model() -> TextEmbedding:

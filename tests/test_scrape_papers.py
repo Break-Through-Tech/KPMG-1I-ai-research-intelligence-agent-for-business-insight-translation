@@ -2,7 +2,7 @@
 Tests for scraping and backfilling arXiv papers into the vector store.
 
 Runs offline: arXiv search results, HTML pages and the encoders are faked.
-The end-to-end and vector-store tests use a real in-memory Qdrant.
+The end-to-end tests use a real in-memory Qdrant.
 
 Parsing, chunking, encoders and storage are tested on their own in
 tests/test_arxiv_blocks.py, test_chunking.py, test_embeddings.py and test_vector_store.py.
@@ -252,41 +252,6 @@ class TestCorpusFile(unittest.TestCase):
 
     def test_committed_corpus_has_100_papers(self):
         self.assertEqual(len(backfill_papers.corpus_ids()), 100)
-
-
-# ---------- the old `papers` collection (removed once the agent moves over) ----------
-
-class TestVectorStore(unittest.TestCase):
-
-    def setUp(self):
-        from qdrant_client import QdrantClient
-        from src import vector_store
-        from src.schema import Paper
-
-        self.vs = vector_store
-        self.client = QdrantClient(":memory:")
-        self.paper = Paper(paper_id="2610.00001v1", title="T", authors=["A"], abstract="Abs.")
-        fake_embed = lambda texts: [[0.1] * vector_store.VECTOR_SIZE for _ in texts]
-        patch("src.vector_store.embed_chunks", side_effect=fake_embed).start()
-
-    def tearDown(self):
-        patch.stopall()
-
-    def all_points(self):
-        points, _ = self.client.scroll(self.vs.COLLECTION_NAME, limit=1000, with_payload=True)
-        return points
-
-    def test_abstract_is_tagged_with_paper_id(self):
-        self.vs.generate_and_store_embeddings(self.client, self.paper)
-        (point,) = self.all_points()
-        self.assertEqual(point.payload["paper_id"], "2610.00001v1")
-        self.assertEqual(point.payload["chunk_text"], "Abs.")
-        self.assertTrue(self.vs.paper_exists(self.client, "2610.00001v1"))
-
-    def test_storing_a_paper_twice_does_not_duplicate(self):
-        self.vs.generate_and_store_embeddings(self.client, self.paper)
-        self.vs.generate_and_store_embeddings(self.client, self.paper)
-        self.assertEqual(len(self.all_points()), 1)
 
 
 if __name__ == "__main__":

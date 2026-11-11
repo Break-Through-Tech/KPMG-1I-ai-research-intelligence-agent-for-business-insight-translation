@@ -8,7 +8,7 @@ Two collections in the same Qdrant instance:
   chunk_index, chunk_id, record_id.
 
 Point IDs are derived from arXiv IDs, so storing a paper again overwrites it instead of
-duplicating it. The old single `papers` collection below still backs the agent until it moves over.
+duplicating it.
 """
 
 import os
@@ -30,16 +30,13 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from src.chunking import Chunk as TextChunk
-from src.schema import Paper, Chunk
+from src.chunking import Chunk
+from src.schema import Paper
 from src.embeddings import (
     DENSE_VECTOR_SIZE,
-    EMBEDDING_MODEL_NAME,
     dense_chunk_text,
-    embed_chunks,
     embed_documents,
     embed_sparse,
-    get_model,
     paper_text,
     sparse_chunk_text,
 )
@@ -48,9 +45,6 @@ HIGH_LEVEL_COLLECTION = "papers_high_level"
 CHUNK_COLLECTION = "paper_chunks"
 DENSE_VECTOR = "dense"
 SPARSE_VECTOR = "sparse"
-
-COLLECTION_NAME = "papers"
-VECTOR_SIZE = 384
 
 
 def get_client(path: str = "./qdrant_data") -> QdrantClient:
@@ -119,7 +113,7 @@ def store_paper_record(client: QdrantClient, paper: Paper):
     )
 
 
-def store_chunks(client: QdrantClient, paper: Paper, chunks: list[TextChunk]):
+def store_chunks(client: QdrantClient, paper: Paper, chunks: list[Chunk]):
     """Embed and store a paper's chunks in paper_chunks, then delete any of its chunks left
     over from an earlier version that had more of them."""
     ensure_ingestion_collections(client)
@@ -150,114 +144,6 @@ def store_chunks(client: QdrantClient, paper: Paper, chunks: list[TextChunk]):
     if points:
         leftovers.must_not = [HasIdCondition(has_id=[p.id for p in points])]
     client.delete(collection_name=CHUNK_COLLECTION, points_selector=FilterSelector(filter=leftovers))
-
-
-def ensure_collection(client: QdrantClient):
-    if COLLECTION_NAME not in [c.name for c in client.get_collections().collections]:
-        client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
-        )
-
-
-def chunk_point_id(chunk_id: str) -> str:
-    """Same chunk always gets the same ID, so saving again overwrites instead of duplicating."""
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
-
-
-def paper_exists(client: QdrantClient, paper_id: str) -> bool:
-    """True if this paper already has its first chunk (the abstract) in the vector store."""
-    ensure_collection(client)
-    found = client.retrieve(
-        collection_name=COLLECTION_NAME,
-        ids=[chunk_point_id(f"{paper_id}_chunk_0")],
-        with_payload=False,
-        with_vectors=False,
-    )
-    return len(found) > 0
-
-
-def delete_paper(client: QdrantClient, paper_id: str):
-    """Remove every chunk of a paper (used before re-storing it, so no old chunks are left behind)."""
-    ensure_collection(client)
-    client.delete(
-        collection_name=COLLECTION_NAME,
-        points_selector=Filter(
-            must=[FieldCondition(key="paper_id", match=MatchValue(value=paper_id))]
-        ),
-    )
-
-
-def store_paper_chunks(
-    client: QdrantClient, paper: Paper, sections: list[tuple[str, str]]
-) -> list[Chunk]:
-    """Embed and store a paper as one chunk per (section_title, text) pair.
-
-    Every chunk carries the paper's arXiv ID (paper_id) plus its title/authors,
-    so a search hit on any section can be traced back to its paper.
-    """
-    ensure_collection(client)
-
-    texts = [text for _, text in sections]
-    vectors = embed_chunks(texts)
-
-    chunks: list[Chunk] = []
-    points: list[PointStruct] = []
-
-    for i, ((section_title, text), vector) in enumerate(zip(sections, vectors)):
-        chunk = Chunk(
-            chunk_id=f"{paper.paper_id}_chunk_{i}",
-            paper_id=paper.paper_id,
-            chunk_text=text,
-            chunk_index=i,
-            section_title=section_title,
-            embedding_model=EMBEDDING_MODEL_NAME,
-        )
-        chunks.append(chunk)
-
-        points.append(
-            PointStruct(
-                id=chunk_point_id(chunk.chunk_id),
-                vector=vector,
-                payload={
-                    **chunk.model_dump(mode="json"),
-                    "title": paper.title,
-                    "authors": paper.authors,
-                    "categories": paper.categories,
-                    "publish_date": paper.publish_date.isoformat() if paper.publish_date else None,
-                    "pdf_url": str(paper.pdf_url) if paper.pdf_url else None,
-                },
-            )
-        )
-
-    client.upsert(collection_name=COLLECTION_NAME, points=points)
-    return chunks
-
-
-def generate_and_store_embeddings(client: QdrantClient, paper: Paper) -> list[Chunk]:
-    """Store just the paper's abstract as a single chunk."""
-    return store_paper_chunks(client, paper, [("Abstract", paper.abstract)])
-
-
-def semantic_search(client: QdrantClient, query: str, top_k: int = 5) -> list[dict]:
-    model = get_model()
-    query_vector = model.encode(query).tolist()
-    results = client.query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vector,
-        limit=top_k,
-    ).points
-    return [
-        {
-            "score": r.score,
-            "paper_id": r.payload["paper_id"],
-            "title": r.payload["title"],
-            "section_title": r.payload.get("section_title"),
-            "chunk_text": r.payload["chunk_text"],
-            "chunk_index": r.payload["chunk_index"],
-        }
-        for r in results
-    ]
 
 
 if __name__ == "__main__":
