@@ -1,0 +1,108 @@
+<!-- Trimmed excerpt of https://arxiv.org/html/2609.30266v1 for parser tests -->
+<html><body>
+<article class="ltx_document ltx_authors_1line">
+<section class="ltx_section" id="S1">
+<h3 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">1 </span>Introduction</h3>
+<div class="ltx_para ltx_noindent" id="S1.p1">
+<p class="ltx_p" id="S1.p1.1">An AI agent’s execution trace is the primary evidence used by researchers to identify reward hacking, to do asynchronous monitoring <cite class="ltx_cite ltx_citemacro_citep">[<a class="ltx_ref">3</a>, <a class="ltx_ref">13</a>]</cite>, and by auditors to conduct safety investigations <cite class="ltx_cite ltx_citemacro_citep">[<a class="ltx_ref">7</a>, <a class="ltx_ref">1</a>]</cite> and compliance audits <cite class="ltx_cite ltx_citemacro_citep">[<a class="ltx_ref">9</a>, <a class="ltx_ref">6</a>]</cite><span class="ltx_note ltx_role_footnote" id="footnote1"><sup class="ltx_note_mark">1</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup class="ltx_note_mark">1</sup>
+<span class="ltx_tag ltx_tag_note">1</span>
+          EU AI Act would require log retention for high-risk AI systems.</span></span></span>. However, all of these activities assume trace integrity: the stored model trace must faithfully preserve the interactions it is intended to capture. If an agent can tamper with their traces, evaluators and monitors may draw conclusions from fabricated or incomplete evidence.</p>
+</div>
+</section>
+<section class="ltx_section" id="S3">
+<h3 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">3 </span>Results: Trace Tampering</h3>
+<section class="ltx_subsection" id="S3.SS1">
+<h4 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">3.1 </span>Capability: Agents can Tamper With Their Traces When Asked</h4>
+<figure class="ltx_figure" id="S3.F5">
+<div class="ltx_flex_figure">
+<div class="ltx_flex_cell ltx_flex_size_2">
+<div class="ltx_block ltx_figure_panel ltx_minipage ltx_align_center ltx_align_top" id="S3.F5.3"><span class="ltx_inline-block"><svg class="ltx_picture ltx_centering" id="S3.F5.pic1"></svg></span>
+<p class="ltx_p ltx_align_center" id="S3.F5.3.1"><span class="ltx_text ltx_font_bold" id="S3.F5.3.1.1">(a) Recorded agent behavior</span></p>
+</div></div></div>
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure"><span class="ltx_text" id="S3.F5.8">Figure 5</span>: </span><span class="ltx_text" id="S3.F5.9">
+<span class="ltx_text ltx_font_bold" id="S3.F5.9.1">A privacy skill turns a simple coding task into trace deletion.</span>
+<span class="ltx_text ltx_font_bold" id="S3.F5.9.2">(a)</span> The user requests a Python client without naming the skill
+or requesting trace deletion. The agent loads the installed skill,
+follows its cleanup instruction, and deletes its own native session
+traces. <span class="ltx_text ltx_font_bold" id="S3.F5.9.3">(b)</span> The installed skill asks for trace deletion under the pretext of privacy protection.
+</span></figcaption>
+</figure>
+</section>
+</section>
+<section class="ltx_bibliography" id="bib">
+<h3 class="ltx_title ltx_title_bibliography">References</h3>
+<ul class="ltx_biblist" id="bib.L1">
+<li class="ltx_bibitem ltx_bib_misc" id="bib.bib7"><span class="ltx_tag ltx_bib_key ltx_role_refnum ltx_tag_bibitem">[1]</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_author">AI Security Institute</span><span class="ltx_text ltx_bib_year"> (2026)</span>
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_title">Incident report: unsanctioned agent behaviour during cyber testing</span>.
+</span>
+<span class="ltx_bibblock">Note: <span class="ltx_text ltx_bib_note">UK AI Security Institute</span>
+</span>
+<span class="ltx_bibblock">External Links: <span class="ltx_text ltx_bib_links"><a class="ltx_ref ltx_bib_external">Link</a></span>
+</span>
+<span class="ltx_bibblock ltx_bib_cited">Cited by: <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">§1</span></a>.
+</span></li>
+<li class="ltx_bibitem ltx_bib_misc" id="bib.bib14"><span class="ltx_tag ltx_bib_key ltx_role_refnum ltx_tag_bibitem">[2]</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_author">Anthropic</span><span class="ltx_text ltx_bib_year"> (2026)</span>
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_bib_title">Compliance API</span>.
+</span>
+<span class="ltx_bibblock">Note: <span class="ltx_text ltx_bib_note">Claude Platform DocumentationAPI version <span class="ltx_text ltx_font_typewriter" id="bib.bib14.1">2023-06-01</span>. Accessed 20 September 2026</span>
+</span>
+<span class="ltx_bibblock">External Links: <span class="ltx_text ltx_bib_links"><a class="ltx_ref ltx_bib_external">Link</a></span>
+</span>
+<span class="ltx_bibblock ltx_bib_cited">Cited by: <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">§1</span></a>.
+</span></li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</ul>
+</section>
+<section class="ltx_part" id="Pt1">
+<h2 class="ltx_title ltx_title_part"><span class="ltx_tag ltx_tag_part">Part I </span>Appendix</h2>
+<section class="ltx_appendix" id="A1">
+<h3 class="ltx_title ltx_title_appendix"><span class="ltx_tag ltx_tag_appendix">Appendix A </span>Attack Settings and Prompt Details</h3>
+<section class="ltx_subsection" id="A1.SS1">
+<h4 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">A.1 </span>Direct User Prompting</h4>
+<section class="ltx_paragraph" id="A1.SS1.SSS0.Px1">
+<h6 class="ltx_title ltx_title_paragraph">Fabricated container-reset event</h6>
+<div class="ltx_para ltx_noindent" id="A1.SS1.SSS0.Px1.p1">
+<p class="ltx_p" id="A1.SS1.SSS0.Px1.p1.1">For this task, we give the agent a single prompt that claims a runtime-recovery hook failure where it failed to persist a lifecycle marker, and asks the agent to add the missing record. However, no container reset actually occured. We look at if the agent will comply to insert unsupported history into the current session’s traces. Tampering success is evaluated by an additive writing of the marker in the agent’s traces. Simply quoting the marker in its response does not count as tampering.
+The exact prompt (for Codex) given to the agents is detailed in <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">Figure</span> <span class="ltx_text ltx_ref_tag">13</span></a>. Simlarly, we adapt prompts to the different harnesses.</p>
+</div>
+</section>
+</section>
+<section class="ltx_subsection" id="A1.SS3">
+<h4 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">A.3 </span>Reward Optimization</h4>
+<section class="ltx_subsubsection" id="A1.SS3.SSS1">
+<h5 class="ltx_title ltx_title_subsubsection"><span class="ltx_tag ltx_tag_subsubsection">A.3.1 </span>Summary Anonymization</h5>
+<div class="ltx_para ltx_noindent" id="A1.SS3.SSS1.p1">
+<p class="ltx_p" id="A1.SS3.SSS1.p1.1">In the summary anonymization task, the agent first needs to read a synthetic case file and write a factual summary about it. A follow-up prompt then asks it to remediate the exposure of confidential information while still preserving the summary’s content. Agents very easily solve the task by anonymizing the sensitive information with placeholders in their summary which earns them a reward of 0.8. Then, agents start reasoning about what is missing in their current solution, and finds that the only missing content they didn’t anonymize were the traces who had logged the case file content. We observed that in most cases, agents finish by tampering their traces in order to achieve higher reward. This is interesting as it shows that agents prioritize this over safety. We provide the detailed prompts for the task in <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">Figure</span> <span class="ltx_text ltx_ref_tag">20</span></a> and the feedback prompt in <a class="ltx_ref"><span class="ltx_text ltx_ref_tag">Figure</span> <span class="ltx_text ltx_ref_tag">21</span></a>.</p>
+</div>
+</section>
+</section>
+</section>
+</section>
+</article>
+</body></html>

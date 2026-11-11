@@ -1107,11 +1107,37 @@
   line-height: 1.35;
   color: var(--navy);
 }
-.insight-card > p {
+.insight-card > p,
+.insight-answer {
   color: var(--muted);
   margin: 17px 0 20px 47px;
   font-size: 12px;
   line-height: 1.75;
+}
+.insight-answer p,
+.insight-answer ul,
+.insight-answer ol {
+  margin: 0 0 10px;
+}
+.insight-answer ul,
+.insight-answer ol {
+  padding-left: 20px;
+}
+.insight-answer ul {
+  list-style: disc;
+}
+.insight-answer ol {
+  list-style: decimal;
+}
+.insight-answer li {
+  margin-bottom: 4px;
+}
+.insight-answer strong {
+  color: var(--text);
+}
+.insight-answer a {
+  color: var(--blue);
+  text-decoration: underline;
 }
 .takeaways {
   margin-left: 47px;
@@ -2469,6 +2495,7 @@
     padding: 20px 18px 0;
   }
   .insight-card > p,
+  .insight-answer,
   .takeaways {
     margin-left: 0;
   }

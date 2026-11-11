@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
 import kpmgBlueLogo from "./assets/kpmg-logo-blue.svg";
 import kpmgWhiteLogo from "./assets/kpmg-logo-white.svg";
+import Markdown from "react-markdown";
 import { runResearch, type ResearchResponse } from "./api/research";
 
 type View = "home" | "results" | "latest" | "trends" | "focus" | "paper";
@@ -815,7 +816,23 @@ function Results({
                 <h2>{data?.answer ? "Executive insight" : "Research insight"}</h2>
               </div>
             </div>
-            <p>{data?.answer ?? "No research answer was returned."}</p>
+            {data?.answer ? (
+              <div className="insight-answer">
+                <Markdown
+                  components={{
+                    a: ({ href, children }) => (
+                      <a href={href} target="_blank" rel="noreferrer">
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {data.answer}
+                </Markdown>
+              </div>
+            ) : (
+              <p>No research answer was returned.</p>
+            )}
             <div className="takeaways">
               <h3>Key takeaways</h3>
               <ul>

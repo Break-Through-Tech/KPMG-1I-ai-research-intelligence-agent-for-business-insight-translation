@@ -1,12 +1,14 @@
 pydantic
 python-dotenv
 qdrant-client
-sentence-transformers
+fastembed
+tokenizers
 langgraph
 langchain-ollama
 langchain-core
 requests
 beautifulsoup4
+pysbd
 streamlit
 fastapi
 uvicorn[standard]
