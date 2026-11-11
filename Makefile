@@ -1,8 +1,8 @@
 PYTHON ?= ./venv/bin/python
-# arXiv id or saved HTML page for `make parse` / `make chunk` / `make embed`
+# arXiv id or saved HTML page for `make parse` / `make chunk` / `make embed` / `make store`
 PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
 
-.PHONY: ingest agent test test-parse test-chunk test-embed parse chunk embed
+.PHONY: ingest agent test test-parse test-chunk test-embed test-store parse chunk embed store
 
 ingest:
 	$(PYTHON) -m scripts.backfill_papers
@@ -25,6 +25,9 @@ test-chunk:
 test-embed:
 	$(PYTHON) -m pytest tests/test_embeddings.py -v
 
+test-store:
+	$(PYTHON) -m pytest tests/test_vector_store.py -v
+
 parse:
 	$(PYTHON) -m src.arxiv_html $(PAPER)
 
@@ -33,3 +36,6 @@ chunk:
 
 embed:
 	$(PYTHON) -m src.embeddings $(PAPER)
+
+store:
+	$(PYTHON) -m src.vector_store $(PAPER)

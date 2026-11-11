@@ -307,6 +307,11 @@ def parse_blocks(html: str) -> list[TextBlock]:
     return blocks
 
 
+def parse_title(html: str) -> str | None:
+    heading = BeautifulSoup(html, "html.parser").find(class_="ltx_title_document")
+    return _tidy(heading.get_text(" ")) if heading else None
+
+
 def fetch_blocks(arxiv_id: str) -> list[TextBlock] | None:
     """A paper's paragraph blocks, or None if arXiv has no HTML version for it."""
     html = fetch_html(arxiv_id)

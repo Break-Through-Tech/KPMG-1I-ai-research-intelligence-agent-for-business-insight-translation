@@ -89,9 +89,7 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
 
-    from bs4 import BeautifulSoup
-
-    from src.arxiv_html import fetch_html, parse_blocks
+    from src.arxiv_html import fetch_html, parse_blocks, parse_title
     from src.chunking import chunk_blocks
 
     source = sys.argv[1]
@@ -99,8 +97,7 @@ if __name__ == "__main__":
     html = Path(source).read_text() if source.endswith(".html") else fetch_html(source)
     if html is None:
         sys.exit(f"arXiv has no HTML version of {source}")
-    heading = BeautifulSoup(html, "html.parser").find(class_="ltx_title_document")
-    title = " ".join(heading.get_text(" ").split()) if heading else source
+    title = parse_title(html) or source
 
     for chunk in chunk_blocks(parse_blocks(html))[:shown]:
         dense_input = dense_chunk_text(title, chunk.breadcrumb, chunk.text)
