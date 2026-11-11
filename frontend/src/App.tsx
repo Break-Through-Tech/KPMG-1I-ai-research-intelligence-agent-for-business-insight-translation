@@ -304,6 +304,7 @@ function Sidebar({
           </button>
         ))}
       </nav>
+      {/* Not connected to anything yet: no research history, saved items, system status or user accounts.
       <div className="nav-label nav-label-spaced">Your workspace</div>
       <nav>
         <button
@@ -334,6 +335,7 @@ function Sidebar({
           </div>
         </div>
       </div>
+      */}
     </aside>
   );
 }
@@ -366,10 +368,12 @@ function Topbar({
         >
           <Icon name={dark ? "sun" : "moon"} />
         </button>
+        {/* No user accounts yet.
         <button className="profile-control" title="Account">
           <span>AC</span>
           <Icon name="down" size={13} />
         </button>
+        */}
       </div>
     </header>
   );
@@ -793,6 +797,7 @@ function Results({
             <Icon name="copy" size={15} />
             Copy
           </button>
+          {/* Not connected to anything yet: no email or export.
           <button>
             <Icon name="mail" size={15} />
             Email finding
@@ -801,6 +806,7 @@ function Results({
             <Icon name="share" size={15} />
             Export
           </button>
+          */}
         </div>
       </div>
       <DemoNotice />
