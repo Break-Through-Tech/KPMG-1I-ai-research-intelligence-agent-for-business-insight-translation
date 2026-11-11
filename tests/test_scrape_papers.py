@@ -81,6 +81,7 @@ class TestScraper(unittest.TestCase):
         patch("src.vector_store.store_chunks", self.store.store_chunks).start()
 
         self.no_html = set()
+        self.unparseable = set()
         patch("src.arxiv_html.fetch_blocks", side_effect=self.fake_fetch_blocks).start()
         patch("src.embeddings.count_tokens", side_effect=words).start()
 
@@ -91,6 +92,8 @@ class TestScraper(unittest.TestCase):
     def fake_fetch_blocks(self, arxiv_id):
         if arxiv_id in self.no_html:
             return None
+        if arxiv_id in self.unparseable:
+            raise AttributeError("'NoneType' object has no attribute 'get_text'")
         return [TextBlock(f"Body of {arxiv_id}.", ["1 Intro"], 0, ("1 Intro",))]
 
     def run_scraper(self, mock_client, ids):
@@ -140,6 +143,19 @@ class TestScraper(unittest.TestCase):
         self.no_html = set()
         new_count, _ = self.run_scraper(mock_client, ["2610.00001v1", "2610.00002v1"])
         self.assertEqual(new_count, 1)
+        self.assertIn("2610.00002v1", self.store.chunks)
+
+    def test_parsing_failure_stores_nothing_and_is_retried(self, mock_client):
+        self.unparseable = {"2610.00002v1"}
+        new_count, failed = self.run_scraper(mock_client, ["2610.00001v1", "2610.00002v1"])
+        self.assertEqual((new_count, failed), (1, ["2610.00002v1"]))
+        self.assertNotIn("2610.00002v1", self.store.records)  # fails before either collection is written
+        self.assertIn("2610.00001v1", self.store.chunks)
+        self.assertEqual(scrape_papers.load_seen_ids(), {"2610.00001v1"})
+
+        self.unparseable = set()
+        new_count, failed = self.run_scraper(mock_client, ["2610.00001v1", "2610.00002v1"])
+        self.assertEqual((new_count, failed), (1, []))
         self.assertIn("2610.00002v1", self.store.chunks)
 
     def test_no_pdfs_written(self, mock_client):
@@ -192,6 +208,19 @@ class TestIngestEndToEnd(unittest.TestCase):
         self.assertEqual(sorted(p.payload["content"] for p in points), sorted(c.text for c in expected))
         self.assertTrue(all(p.payload["arxiv_id"] == "2610.13767v1" for p in points))
         self.assertTrue(vector_store.paper_is_stored(self.client, "2610.13767v1"))
+
+    def test_reingesting_a_stored_paper_overwrites_it(self):
+        from src import vector_store
+
+        def stored():
+            return {name: sorted(p.id for p in self.client.scroll(name, limit=1000)[0])
+                    for name in (vector_store.HIGH_LEVEL_COLLECTION, vector_store.CHUNK_COLLECTION)}
+
+        scrape_papers.ingest_paper(FakeResult("2610.13767v1"), self.client)
+        first = stored()
+        scrape_papers.ingest_paper(FakeResult("2610.13767v1"), self.client)
+        self.assertEqual(stored(), first)
+        self.assertEqual(len(first[vector_store.HIGH_LEVEL_COLLECTION]), 1)
 
 
 # ---------- backfill ----------
