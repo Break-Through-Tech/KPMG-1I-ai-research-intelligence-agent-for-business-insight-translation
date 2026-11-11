@@ -5,6 +5,9 @@ export type RetrievedChunk = {
   section_title?: string;
   chunk_text?: string;
   chunk_index?: number;
+  authors?: string[];
+  publish_date?: string | null;
+  categories?: string[];
 };
 
 export type Citation = {

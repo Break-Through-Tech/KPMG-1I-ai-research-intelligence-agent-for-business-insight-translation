@@ -203,6 +203,22 @@ const papers = [
 
 type Paper = (typeof papers)[number];
 
+function formatAuthors(authors?: string[]): string {
+  if (!authors?.length) return "Authors unavailable";
+  return authors.length > 3 ? `${authors.slice(0, 3).join(", ")} et al.` : authors.join(", ");
+}
+
+// publish_date is a calendar date ("2026-08-20"); UTC keeps it from shifting a day in US time zones.
+function formatDate(isoDate?: string | null): string {
+  if (!isoDate) return "—";
+  return new Date(isoDate).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 function papersFromResearch(data: ResearchResponse | null): Paper[] {
   const chunks = data?.retrieved_chunks;
   if (!chunks?.length) return papers;
@@ -211,8 +227,8 @@ function papersFromResearch(data: ResearchResponse | null): Paper[] {
     const citation = data?.citations?.find((item) => item.paper_id === chunk.paper_id);
     return {
       title: chunk.title || "Research source",
-      authors: "Metadata unavailable",
-      date: "—",
+      authors: formatAuthors(chunk.authors),
+      date: formatDate(chunk.publish_date),
       source: chunk.paper_id || "Research source",
       category: chunk.section_title || "Research source",
       relevance: Math.round((chunk.score ?? 0) * 100),
