@@ -204,7 +204,8 @@ class TestBackfill(unittest.TestCase):
         self.no_html = set()
         self.ingested = []
 
-        patch.object(backfill_papers, "all_known_ids", lambda: self.known).start()
+        patch.object(backfill_papers, "corpus_ids", lambda: self.known).start()
+        patch.object(backfill_papers, "all_known_ids", lambda: self.known + ["2611.00009v1"]).start()
         patch.object(backfill_papers, "_default_vector_client", MagicMock).start()
         patch.object(backfill_papers, "ingest_paper", self.fake_ingest).start()
         patch("src.vector_store.paper_is_stored", lambda client, i: i in self.stored).start()
@@ -234,6 +235,23 @@ class TestBackfill(unittest.TestCase):
         self.no_html = {"2610.00003v1"}
         done, failed, no_html = backfill_papers.main()
         self.assertEqual((done, failed, no_html), (1, [], ["2610.00003v1"]))
+
+    def test_all_uses_every_seen_paper_instead_of_the_corpus(self):
+        backfill_papers.main(use_all=True)
+        self.assertEqual(self.ingested, ["2610.00002v1", "2610.00003v1", "2611.00009v1"])
+
+
+class TestCorpusFile(unittest.TestCase):
+
+    def test_reads_ids_and_ignores_comments_and_blank_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "corpus_ids.txt"
+            path.write_text("# eval papers\n2610.00002v1\n\n  2610.00001v1  \n# others\n2610.00001v1\n")
+            with patch.object(backfill_papers, "CORPUS_FILE", path):
+                self.assertEqual(backfill_papers.corpus_ids(), ["2610.00001v1", "2610.00002v1"])
+
+    def test_committed_corpus_has_100_papers(self):
+        self.assertEqual(len(backfill_papers.corpus_ids()), 100)
 
 
 # ---------- the old `papers` collection (removed once the agent moves over) ----------

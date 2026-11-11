@@ -4,7 +4,7 @@ PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
 
 .PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest parse chunk embed store
 
-# Stores every seen paper that isn't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
+# Stores the papers in data/corpus_ids.txt that aren't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
 ingest:
 	$(PYTHON) -m scripts.backfill_papers
 
