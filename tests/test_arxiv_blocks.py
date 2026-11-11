@@ -166,6 +166,32 @@ def test_references_and_acknowledgements_are_skipped(pandora, dualquant):
     assert all("References" not in b.breadcrumb for b in dualquant)
 
 
+def section(title: str, number: str = "") -> str:
+    tag = f'<span class="ltx_tag ltx_tag_section">{number} </span>' if number else ""
+    return (f'<section class="ltx_section"><h2 class="ltx_title">{tag}{title}</h2>'
+            f'<div class="ltx_para"><p>Text of {title}.</p></div></section>')
+
+
+@pytest.mark.parametrize("title", [
+    "Acknowledgment", "Reproducibility Statement", "Funding", "Author Contributions",
+    "CRediT authorship contribution statement", "Declaration of competing interest", "Declarations",
+    "Data and Code Availability", "AI Use Statement", "Usage of AI", "AI-Assistance Disclosure",
+    "Declaration of Generative AI and AI-assisted Technologies", "Ethics and Generative-AI Use Disclosure",
+])
+def test_administrative_sections_are_skipped(title):
+    blocks = parse_blocks(f"<article>{section('Results', '1')}{section(title, '9')}</article>")
+    assert [b.breadcrumb for b in blocks] == [["1 Results"]]
+
+
+@pytest.mark.parametrize("title", [
+    "Ethics Statement", "Impact Statement", "Our Contributions", "Reproducibility and Evidence Provenance",
+    "Use of LLMs as Judges", "How Developers Use AI Assistants", "Token Usage and Billing",
+])
+def test_similar_looking_content_sections_are_kept(title):
+    [block] = parse_blocks(f"<article>{section(title)}</article>")
+    assert block.breadcrumb == [title]
+
+
 # ---------- malformed or unusual HTML ----------
 
 def test_wrongly_nested_sections_get_their_own_breadcrumbs():

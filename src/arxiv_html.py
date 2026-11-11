@@ -21,8 +21,24 @@ ARXIV_HTML_URL = "https://arxiv.org/html/{arxiv_id}"
 USER_AGENT = "KPMG-1I-research-agent (Break Through Tech student project)"
 REQUEST_DELAY_SECONDS = 3  # arXiv asks for ~1 request every 3 seconds
 
-# Sections that add noise instead of useful content.
-SKIP_SECTION_TITLES = {"references", "bibliography", "acknowledgments", "acknowledgements"}
+# Sections that add noise instead of useful content: references and administrative statements.
+# Matched against the whole heading (number removed, lowercased), so e.g. "Our Contributions" or
+# "Reproducibility and Evidence Provenance" are kept. Ethics and impact statements are kept too.
+SKIP_SECTION = re.compile(r"""^(?:
+    references | bibliography | acknowledge?ments?
+  | reproducibility\ statement
+  | funding(?:\ statement)?
+  | (?:author\ )?declarations | declaration\ of\ (?:competing\ )?interests? | competing\ interests?
+  | conflicts?\ of\ interests?
+  | (?:credit\ )?(?:authors?'?|authorship)\ (?:authorship\ )?contributions?(?:\ statement)?
+  | (?:data|code|artifact|software|materials)(?:\ and\ (?:data|code|materials))?\ availability(?:\ statement)?
+)$""", re.X)
+# Statements of how the authors used AI tools, e.g. "AI Use Statement", "Declaration of Generative AI
+# and AI-assisted Technologies". Anchored phrasings only: many papers study AI use in their content.
+AI_USE_DISCLOSURE = re.compile(r"""^(?=.*\b(?:use|usage|disclosure|declaration|assist))
+    (?:ethics\ and\ )?(?:declaration\ (?:of|on)\ )?(?:the\ )?(?:use\ of\ |usage\ of\ )?(?:generative[-\ ])?
+    (?:ai|llms?)(?:[-\ ]assist(?:ance|ants?|ed)?)?(?:\ and\ ai-assisted\ technologies)?
+    (?:\ use|\ usage)?(?:\ statement|\ disclosure)?$""", re.X)
 
 HEADING_TAGS = ["h2", "h3", "h4", "h5", "h6"]
 
@@ -168,6 +184,11 @@ def _listing_text(el: Tag) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def _is_skipped_section(plain_title: str) -> bool:
+    title = plain_title.lower()
+    return bool(SKIP_SECTION.match(title) or AI_USE_DISCLOSURE.match(title))
+
+
 def _walk(el: Tag, crumbs: list[tuple[int, str]], blocks: list[TextBlock]):
     for child in el.children:
         if not isinstance(child, Tag):
@@ -177,7 +198,7 @@ def _walk(el: Tag, crumbs: list[tuple[int, str]], blocks: list[TextBlock]):
 
         if level is not None:
             title, plain = _section_title(child)
-            if plain.lower() in SKIP_SECTION_TITLES:
+            if _is_skipped_section(plain):
                 continue
             # Keep only outer levels, so wrongly nested sections don't stack on each other.
             inner = [c for c in crumbs if c[0] < level]
