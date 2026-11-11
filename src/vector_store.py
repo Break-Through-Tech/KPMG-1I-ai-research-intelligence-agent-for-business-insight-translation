@@ -2,10 +2,12 @@
 
 Two collections in the same Qdrant instance:
 - papers_high_level: one point per paper, a dense vector of its title + abstract.
-  Payload: arxiv_id, title, content (the abstract).
+  Payload: arxiv_id, title, authors, publish_date, categories, content (the abstract).
 - paper_chunks: one point per chunk, with a dense and a sparse (BM25, IDF applied by Qdrant)
-  vector. Payload: arxiv_id, title, content_type, content (the plain chunk text), breadcrumb,
-  chunk_index, chunk_id, record_id.
+  vector. Payload: arxiv_id, title, authors, publish_date, categories, content_type, content
+  (the plain chunk text), breadcrumb, chunk_index, chunk_id, record_id.
+
+publish_date is an ISO date string ("2026-10-15") or None.
 
 Point IDs are derived from arXiv IDs, so storing a paper again overwrites it instead of
 duplicating it.
@@ -91,6 +93,15 @@ def ensure_ingestion_collections(client: QdrantClient):
                 client.create_payload_index(name, "arxiv_id", PayloadSchemaType.KEYWORD)
 
 
+def paper_metadata(paper: Paper) -> dict:
+    """The paper fields stored on its record and on each of its chunks."""
+    return {
+        "authors": paper.authors,
+        "publish_date": paper.publish_date.isoformat() if paper.publish_date else None,
+        "categories": paper.categories,
+    }
+
+
 def paper_is_stored(client: QdrantClient, arxiv_id: str) -> bool:
     """True if the paper has its high-level record and at least one chunk."""
     ensure_ingestion_collections(client)
@@ -108,7 +119,7 @@ def store_paper_record(client: QdrantClient, paper: Paper):
         points=[PointStruct(
             id=point_id(paper.paper_id),
             vector={DENSE_VECTOR: vector},
-            payload={"arxiv_id": paper.paper_id, "title": paper.title, "content": paper.abstract},
+            payload={"arxiv_id": paper.paper_id, "title": paper.title, **paper_metadata(paper), "content": paper.abstract},
         )],
     )
 
@@ -129,6 +140,7 @@ def store_chunks(client: QdrantClient, paper: Paper, chunks: list[Chunk]):
             payload={
                 "arxiv_id": paper.paper_id,
                 "title": paper.title,
+                **paper_metadata(paper),
                 "content_type": "text",
                 "content": chunk.text,
                 "breadcrumb": chunk.breadcrumb,
