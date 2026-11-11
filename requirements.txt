@@ -2,6 +2,7 @@ pydantic
 python-dotenv
 qdrant-client
 fastembed
+tokenizers
 langgraph
 langchain-ollama
 langchain-core

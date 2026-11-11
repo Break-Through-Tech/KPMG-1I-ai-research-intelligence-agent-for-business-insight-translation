@@ -3,22 +3,28 @@
 START -> retrieve_papers and retrieve_chunks (in parallel) -> assemble_context -> generate_answer -> END
 """
 
+from collections.abc import Callable
 from dataclasses import asdict
-from functools import partial
+from functools import cache, partial
 from typing import Any, TypedDict
 
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from qdrant_client import QdrantClient
+from tokenizers import Tokenizer
 
 from src.prompts import answer_prompt
 from src.retrieval import search_chunks, search_papers
 from src.vector_store import get_client
 
 LLM_MODEL = "qwen2.5:7b"
+# Hugging Face copy of the tokenizer qwen2.5:7b uses, so the budget counts the tokens the LLM actually reads.
+LLM_TOKENIZER = "Qwen/Qwen2.5-7B-Instruct"
 # Ollama's default context is much smaller than what qwen2.5 supports, and anything past it is silently dropped.
 LLM_CONTEXT_TOKENS = 32768
+# The local LLM reads about 200 tokens a second, so every 1,000 tokens of context adds about 5 s per answer.
+CONTEXT_TOKENS = 6000
 NO_EVIDENCE_ANSWER = "No relevant papers or passages were found for this question."
 
 
@@ -54,13 +60,52 @@ def _format_chunk(hit: dict[str, Any]) -> str:
     return f"{header}\n{hit['content']}"
 
 
+def _papers_section(hits: list[dict[str, Any]]) -> str:
+    return "## Papers\n\n" + ("\n\n".join(_format_paper(hit) for hit in hits) or "No papers found.")
+
+
+def _passages_section(hits: list[dict[str, Any]]) -> str:
+    return "## Passages\n\n" + ("\n\n".join(_format_chunk(hit) for hit in hits) or "No passages found.")
+
+
 def format_context(paper_hits: list[dict[str, Any]], chunk_hits: list[dict[str, Any]]) -> str:
     """Papers and passages as two labelled sections; empty when both searches found nothing."""
     if not paper_hits and not chunk_hits:
         return ""
-    papers = "\n\n".join(_format_paper(hit) for hit in paper_hits) or "No papers found."
-    passages = "\n\n".join(_format_chunk(hit) for hit in chunk_hits) or "No passages found."
-    return f"## Papers\n\n{papers}\n\n## Passages\n\n{passages}"
+    return f"{_papers_section(paper_hits)}\n\n{_passages_section(chunk_hits)}"
+
+
+@cache
+def _tokenizer() -> Tokenizer:
+    return Tokenizer.from_pretrained(LLM_TOKENIZER)
+
+
+def count_tokens(text: str) -> int:
+    return len(_tokenizer().encode(text).ids)
+
+
+def _take_while(hits: list[dict[str, Any]], fits: Callable[[list[dict[str, Any]]], bool]) -> list[dict[str, Any]]:
+    kept = []
+    for hit in hits:
+        if not fits(kept + [hit]):
+            break
+        kept.append(hit)
+    return kept
+
+
+def fit_to_budget(
+    paper_hits: list[dict[str, Any]], chunk_hits: list[dict[str, Any]], max_tokens: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The highest-ranked whole papers and passages whose formatted context fits in max_tokens.
+
+    Papers get the share of the budget they take up in the full context; passages fill the rest.
+    """
+    if not paper_hits and not chunk_hits:
+        return [], []
+    paper_share = count_tokens(_papers_section(paper_hits)) / count_tokens(format_context(paper_hits, chunk_hits))
+    papers = _take_while(paper_hits, lambda kept: count_tokens(_papers_section(kept)) <= paper_share * max_tokens)
+    chunks = _take_while(chunk_hits, lambda kept: count_tokens(format_context(papers, kept)) <= max_tokens)
+    return papers, chunks
 
 
 def retrieve_papers(state: AgentState, client: QdrantClient) -> dict:
@@ -72,7 +117,7 @@ def retrieve_chunks(state: AgentState, client: QdrantClient) -> dict:
 
 
 def assemble_context(state: AgentState) -> dict:
-    return {"context": format_context(state["paper_hits"], state["chunk_hits"])}
+    return {"context": format_context(*fit_to_budget(state["paper_hits"], state["chunk_hits"], CONTEXT_TOKENS))}
 
 
 def generate_answer(state: AgentState, llm: Runnable) -> dict:
@@ -119,13 +164,15 @@ def run_agent(query: str) -> AgentState:
 
 
 def _print_result(state: AgentState):
+    papers, chunks = fit_to_budget(state["paper_hits"], state["chunk_hits"], CONTEXT_TOKENS)
     print(f"\n===== Answer =====\n{state['answer']}")
-    print(f"\n===== Retrieved papers ({len(state['paper_hits'])}) =====")
-    for hit in state["paper_hits"]:
+    print(f"\n===== Papers given to the LLM ({len(papers)} of {len(state['paper_hits'])} retrieved) =====")
+    for hit in papers:
         print(f"{hit['rank']:3}. {hit['arxiv_id']}  {hit['title']}")
-    print(f"\n===== Retrieved passages ({len(state['chunk_hits'])}) =====")
-    for hit in state["chunk_hits"]:
+    print(f"\n===== Passages given to the LLM ({len(chunks)} of {len(state['chunk_hits'])} retrieved) =====")
+    for hit in chunks:
         print(f"{hit['rank']:3}. {hit['chunk_id']}  {' > '.join(hit['breadcrumb'])}")
+    print(f"\nContext: {count_tokens(state['context']):,} tokens (budget {CONTEXT_TOKENS:,})")
 
 
 if __name__ == "__main__":

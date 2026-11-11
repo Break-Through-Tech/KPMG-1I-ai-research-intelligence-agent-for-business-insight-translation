@@ -1,4 +1,4 @@
-"""Agent tests. Qdrant and the LLM are faked."""
+"""Agent tests. Qdrant and the LLM are faked, and tokens are counted as words."""
 
 import threading
 from dataclasses import asdict
@@ -8,11 +8,21 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
 from src import agent
-from src.agent import NO_EVIDENCE_ANSWER, GenerationError, build_graph, format_context, run_agent
+from src.agent import NO_EVIDENCE_ANSWER, GenerationError, build_graph, fit_to_budget, format_context, run_agent
 from src.prompts import answer_prompt
 from src.retrieval import ChunkHit, PaperHit, RetrievalError
 
 QUESTION = "How does 4-bit quantization affect LLM accuracy?"
+
+
+def count_words(text):
+    return len(text.split())
+
+
+@pytest.fixture(autouse=True)
+def word_tokens(monkeypatch):
+    """The real tokenizer is downloaded from Hugging Face; word counts keep the tests offline."""
+    monkeypatch.setattr(agent, "count_tokens", count_words)
 
 
 def paper(rank=1, arxiv_id="2610.13767v1", title="DualQuant", abstract="We quantize LLMs to 4 bits.") -> dict:
@@ -71,6 +81,48 @@ class TestFormatContext:
         assert "[P1] | arXiv:2610.13767v1\n" in context
         assert "[C1] | arXiv:2610.29544v1\nSelective KV reconstruction." in context
         assert "None" not in context and "Abstract" not in context and "Section" not in context
+
+
+def papers_and_chunks(n_papers=3, n_chunks=5):
+    papers = [paper(i, f"2610.0000{i}v1", f"Paper{i}", f"abstract of paper {i} " * 10) for i in range(1, n_papers + 1)]
+    chunks = [chunk(i, f"2610.1000{i}v1", f"Source{i}", f"passage number {i} " * 20) for i in range(1, n_chunks + 1)]
+    return papers, chunks
+
+
+class TestFitToBudget:
+    def test_everything_kept_when_it_fits(self):
+        papers, chunks = papers_and_chunks()
+        assert fit_to_budget(papers, chunks, 10_000) == (papers, chunks)
+
+    def test_keeps_the_highest_ranked_whole_items_within_the_budget(self):
+        papers, chunks = papers_and_chunks()
+        budget = count_words(format_context(papers, chunks)) // 2
+        kept_papers, kept_chunks = fit_to_budget(papers, chunks, budget)
+        assert kept_papers == papers[:len(kept_papers)] and kept_chunks == chunks[:len(kept_chunks)]
+        assert 0 < len(kept_chunks) < len(chunks)
+        assert count_words(format_context(kept_papers, kept_chunks)) <= budget
+        assert count_words(format_context(kept_papers, chunks[:len(kept_chunks) + 1])) > budget
+
+    def test_papers_get_their_share_of_the_full_context(self):
+        papers, chunks = papers_and_chunks()
+        share = count_words(agent._papers_section(papers)) / count_words(format_context(papers, chunks))
+        budget = count_words(format_context(papers, chunks)) // 2
+        kept_papers, _ = fit_to_budget(papers, chunks, budget)
+        assert count_words(agent._papers_section(kept_papers)) <= share * budget
+        assert count_words(agent._papers_section(papers[:len(kept_papers) + 1])) > share * budget
+
+    def test_passages_use_the_whole_budget_when_there_are_no_papers(self):
+        _, chunks = papers_and_chunks()
+        budget = count_words(format_context([], chunks)) - 1
+        assert fit_to_budget([], chunks, budget) == ([], chunks[:-1])
+
+    def test_papers_use_the_whole_budget_when_there_are_no_passages(self):
+        papers, _ = papers_and_chunks()
+        budget = count_words(format_context(papers, [])) - 1
+        assert fit_to_budget(papers, [], budget) == (papers[:-1], [])
+
+    def test_nothing_found(self):
+        assert fit_to_budget([], [], 6000) == ([], [])
 
 
 class TestAnswerPrompt:
@@ -154,9 +206,20 @@ class TestGraph:
 
     def test_context_is_assembled_once_with_both_results(self, searches, monkeypatch):
         seen = []
-        monkeypatch.setattr(agent, "format_context", lambda papers, chunks: seen.append((papers, chunks)) or "ctx")
+        monkeypatch.setattr(agent, "fit_to_budget", lambda papers, chunks, budget: seen.append((papers, chunks)) or ([], []))
         run_graph()
         assert seen == [([asdict(PAPER_HIT)], [asdict(CHUNK_HIT)])]
+
+    def test_context_keeps_the_top_items_within_the_budget_and_state_keeps_all_hits(self, monkeypatch):
+        papers, chunks = papers_and_chunks()
+        budget = count_words(format_context(papers, chunks)) // 2
+        monkeypatch.setattr(agent, "CONTEXT_TOKENS", budget)
+        monkeypatch.setattr(agent, "search_papers", FakeSearch([PaperHit(**hit) for hit in papers]))
+        monkeypatch.setattr(agent, "search_chunks", FakeSearch([ChunkHit(**hit) for hit in chunks]))
+        state = run_graph()
+        assert state["paper_hits"] == papers and state["chunk_hits"] == chunks
+        assert state["context"] == format_context(*fit_to_budget(papers, chunks, budget))
+        assert count_words(state["context"]) <= budget and "Source5" not in state["context"]
 
     def test_llm_gets_the_original_query_and_the_assembled_context(self, searches):
         llm = FakeLLM()
