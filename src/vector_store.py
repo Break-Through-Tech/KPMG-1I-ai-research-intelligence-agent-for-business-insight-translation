@@ -117,7 +117,7 @@ def store_chunks(client: QdrantClient, paper: Paper, chunks: list[Chunk]):
     """Embed and store a paper's chunks in paper_chunks, then delete any of its chunks left
     over from an earlier version that had more of them."""
     ensure_ingestion_collections(client)
-    dense = embed_documents([dense_chunk_text(paper.title, c.breadcrumb, c.text) for c in chunks])
+    dense = embed_documents([dense_chunk_text(c.breadcrumb, c.text) for c in chunks])
     sparse = embed_sparse([sparse_chunk_text(c.breadcrumb, c.text) for c in chunks])
 
     points = []

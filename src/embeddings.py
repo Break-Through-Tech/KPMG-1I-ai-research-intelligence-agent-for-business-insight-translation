@@ -45,12 +45,11 @@ def paper_text(title: str, abstract: str) -> str:
     return f"{title}\n\n{abstract}"
 
 
-def dense_chunk_text(title: str, breadcrumb: list[str], text: str) -> str:
-    """Dense input for a chunk: the paper and section give it context the chunk text may lack."""
-    header = f"Paper: {title}"
-    if breadcrumb:
-        header += f"\nSection: {' > '.join(breadcrumb)}"
-    return f"{header}\n\n{text}"
+def dense_chunk_text(breadcrumb: list[str], text: str) -> str:
+    """Dense input for a chunk: the section gives it context the chunk text may lack.
+    No title: a generic one ("Large Language Models as ...") pulls every chunk of its paper
+    toward any question that shares its topic words."""
+    return f"Section: {' > '.join(breadcrumb)}\n\n{text}" if breadcrumb else text
 
 
 def sparse_chunk_text(breadcrumb: list[str], text: str) -> str:
@@ -92,7 +91,7 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
 
-    from src.arxiv_html import fetch_html, parse_blocks, parse_title
+    from src.arxiv_html import fetch_html, parse_blocks
     from src.chunking import chunk_blocks
 
     source = sys.argv[1]
@@ -100,10 +99,9 @@ if __name__ == "__main__":
     html = Path(source).read_text() if source.endswith(".html") else fetch_html(source)
     if html is None:
         sys.exit(f"arXiv has no HTML version of {source}")
-    title = parse_title(html) or source
 
     for chunk in chunk_blocks(parse_blocks(html))[:shown]:
-        dense_input = dense_chunk_text(title, chunk.breadcrumb, chunk.text)
+        dense_input = dense_chunk_text(chunk.breadcrumb, chunk.text)
         sparse_input = sparse_chunk_text(chunk.breadcrumb, chunk.text)
         [dense] = embed_documents([dense_input])
         [sparse] = embed_sparse([sparse_input])

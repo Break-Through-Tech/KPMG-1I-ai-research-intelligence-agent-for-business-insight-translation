@@ -119,10 +119,10 @@ class TestChunks:
         assert len(point.vector[DENSE_VECTOR]) == 768
         assert point.vector[SPARSE_VECTOR].indices == [1, 2]
 
-    def test_dense_input_has_title_and_section_but_sparse_has_no_title(self, client, encoded):
+    def test_chunk_inputs_have_section_but_no_title(self, client, encoded):
         store_chunks(client, PAPER, make_chunks(1))
 
-        assert encoded["dense"] == ["Paper: DualQuant\nSection: 4 Method > 4.2 Scales\n\nChunk 0 text."]
+        assert encoded["dense"] == ["Section: 4 Method > 4.2 Scales\n\nChunk 0 text."]
         assert encoded["sparse"] == ["4 Method > 4.2 Scales\n\nChunk 0 text."]
 
     def test_storing_again_overwrites(self, client, encoded):

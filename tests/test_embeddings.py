@@ -21,13 +21,11 @@ TEXT = "We quantize both weights and activations to 4 bits."
 
 
 class TestEmbeddingInputs:
-    def test_dense_chunk_text_adds_paper_and_section(self):
-        assert dense_chunk_text(TITLE, BREADCRUMB, TEXT) == (
-            f"Paper: {TITLE}\nSection: 4 Methodology > 4.2 Dual scales\n\n{TEXT}"
-        )
+    def test_dense_chunk_text_adds_section_but_not_title(self):
+        assert dense_chunk_text(BREADCRUMB, TEXT) == f"Section: 4 Methodology > 4.2 Dual scales\n\n{TEXT}"
 
-    def test_dense_chunk_text_without_breadcrumb_has_no_section_line(self):
-        assert dense_chunk_text(TITLE, [], TEXT) == f"Paper: {TITLE}\n\n{TEXT}"
+    def test_dense_chunk_text_without_breadcrumb_is_just_the_text(self):
+        assert dense_chunk_text([], TEXT) == TEXT
 
     def test_sparse_chunk_text_adds_section_but_not_title(self):
         assert sparse_chunk_text(BREADCRUMB, TEXT) == f"4 Methodology > 4.2 Dual scales\n\n{TEXT}"
