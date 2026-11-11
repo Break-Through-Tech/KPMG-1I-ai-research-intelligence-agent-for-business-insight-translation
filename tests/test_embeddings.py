@@ -7,7 +7,9 @@ from src.embeddings import (
     count_tokens,
     dense_chunk_text,
     embed_documents,
+    embed_query,
     embed_sparse,
+    embed_sparse_query,
     get_dense_model,
     paper_text,
     sparse_chunk_text,
@@ -62,6 +64,35 @@ class TestDenseEncoder:
             "Simmer the tomatoes with garlic and basil for twenty minutes.",
         ])
         assert cosine(quant, quant2) > cosine(quant, cooking)
+
+
+class TestQueryEncoders:
+    QUESTION = "How can LLM weights be quantized to 4 bits?"
+
+    def test_question_is_embedded_with_the_query_prefix(self):
+        [expected] = get_dense_model().embed([f"search_query: {self.QUESTION}"])
+        vector = embed_query(self.QUESTION)
+        assert len(vector) == DENSE_VECTOR_SIZE and isinstance(vector[0], float)
+        assert np.allclose(vector, expected)
+        assert not np.allclose(vector, embed_documents([self.QUESTION])[0], atol=1e-3)
+
+    def test_question_is_closer_to_a_relevant_document(self):
+        relevant, unrelated = embed_documents([
+            "Post-training quantization of LLM weights to 4-bit integers.",
+            "Simmer the tomatoes with garlic and basil for twenty minutes.",
+        ])
+        question = embed_query(self.QUESTION)
+        assert cosine(question, relevant) > cosine(question, unrelated)
+
+    def test_sparse_question_terms_all_weigh_one_however_often_they_repeat(self):
+        once = embed_sparse_query("quantization of weights")
+        repeated = embed_sparse_query("quantization quantization quantization of weights")
+        assert sorted(once.indices) == sorted(repeated.indices)
+        assert once.values == [1.0] * len(once.indices)
+
+    def test_sparse_question_terms_match_document_terms(self):
+        [document] = embed_sparse(["Activation quantization for language models."])
+        assert set(embed_sparse_query("quantization").indices) <= set(document.indices)
 
 
 class TestSparseEncoder:

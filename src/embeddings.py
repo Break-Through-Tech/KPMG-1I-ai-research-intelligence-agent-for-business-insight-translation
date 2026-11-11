@@ -11,7 +11,9 @@ from qdrant_client.models import SparseVector
 DENSE_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 DENSE_VECTOR_SIZE = 768
 # Nomic is trained with these task prefixes; documents and queries must use the matching one.
+# fastembed doesn't add them, query_embed included.
 DOCUMENT_PREFIX = "search_document: "
+QUERY_PREFIX = "search_query: "
 DENSE_BATCH_SIZE = 8
 SPARSE_MODEL_NAME = "Qdrant/bm25"
 
@@ -73,6 +75,16 @@ def embed_sparse(texts: list[str]) -> list[SparseVector]:
         SparseVector(indices=e.indices.tolist(), values=e.values.tolist())
         for e in get_sparse_model().embed(texts)
     ]
+
+
+def embed_query(question: str) -> list[float]:
+    return next(get_dense_model().embed([QUERY_PREFIX + question])).tolist()
+
+
+def embed_sparse_query(question: str) -> SparseVector:
+    """Each distinct question term gets weight 1; unlike embed_sparse, term counts don't matter."""
+    e = next(get_sparse_model().query_embed(question))
+    return SparseVector(indices=e.indices.tolist(), values=[float(v) for v in e.values])
 
 
 if __name__ == "__main__":

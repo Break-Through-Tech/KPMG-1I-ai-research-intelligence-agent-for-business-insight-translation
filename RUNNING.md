@@ -87,6 +87,7 @@ make test-chunk    # paragraphs -> chunks
 make test-embed    # chunks -> dense and sparse vectors (uses the real models)
 make test-store    # vectors -> Qdrant collections (in-memory Qdrant)
 make test-ingest   # the whole pipeline, scraper and backfill
+make test-retrieval  # paper search and hybrid chunk search (in-memory Qdrant, fake encoders)
 ```
 
 arXiv and Qdrant are faked or in memory. The embedding tests load the real models, so they need them downloaded
@@ -110,7 +111,44 @@ any arXiv ID or saved HTML page:
 make chunk PAPER=2610.31552v1
 ```
 
-## 6. Run commands without Make
+## 6. Search the vector store
+
+Two independent searches over what `make ingest` stored (`src/retrieval.py`):
+
+- **Paper search**: the question's Nomic vector (with the `search_query: ` prefix) against each paper's
+  title + abstract in `papers_high_level`. Top 10 papers, scored by cosine similarity.
+- **Chunk search**: hybrid search over every chunk in `paper_chunks`. A dense (Nomic) search and a sparse
+  (BM25) search each pick their top 100 chunks, and Qdrant merges the two lists with Reciprocal Rank Fusion
+  (k = 60). Top 20 chunks, scored by RRF score; only their order is meaningful.
+
+```bash
+make search Q="How should operators plan memory capacity for the KV cache when serving LLMs?"
+make search-explain Q="..."   # also each chunk's rank and score in the dense-only and sparse-only searches
+make search                   # no Q: type one question after another; blank line to quit
+```
+
+`./venv/bin/python -m src.retrieval --help` shows the other options (`--papers N`, `--chunks N`; 0 skips that
+search). Local Qdrant allows one process at a time, so don't search while `make ingest` is running.
+
+From Python:
+
+```python
+from src.vector_store import get_client
+from src.retrieval import search_papers, search_chunks
+
+client = get_client()
+papers = search_papers(client, "How can companies stop AI chatbots from making things up?")              # list[PaperHit]
+chunks = search_chunks(client, "How can companies stop AI chatbots from making things up?", explain=True)  # list[ChunkHit]
+client.close()
+```
+
+`PaperHit` has `arxiv_id`, `title`, `abstract`, `score` and `rank`. `ChunkHit` has `chunk_id`, `arxiv_id`, `title`,
+`content`, `breadcrumb`, `chunk_index` (document order), `content_type`, `score` and `rank`; with `explain=True`
+also `dense_rank`, `dense_score`, `sparse_rank` and `sparse_score` (None when that search didn't return the
+chunk among its top 100). Result counts, the candidate pool and the RRF constant are arguments with defaults in
+`src/retrieval.py`. A missing collection or a Qdrant failure raises `RetrievalError`.
+
+## 7. Run commands without Make
 
 The Make targets are shortcuts for these commands:
 
@@ -120,7 +158,7 @@ The Make targets are shortcuts for these commands:
 ./venv/bin/python -m src.chunking <arxiv_id | page.html>   # make chunk (likewise src.arxiv_html, src.embeddings, src.vector_store)
 ```
 
-## 7. Run the Stage 1 React/FastAPI frontend
+## 8. Run the Stage 1 React/FastAPI frontend
 
 The research endpoint fails until the agent moves to the new collections (see section 3); the rest of this
 section still applies.

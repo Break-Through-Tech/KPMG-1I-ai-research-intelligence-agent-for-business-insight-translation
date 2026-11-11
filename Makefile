@@ -1,8 +1,10 @@
 PYTHON ?= ./venv/bin/python
 # arXiv id or saved HTML page for `make parse` / `make chunk` / `make embed` / `make store`
 PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
+# research question for `make search`; leave empty to type questions one after another
+Q ?=
 
-.PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest parse chunk embed store
+.PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest test-retrieval parse chunk embed store search search-explain
 
 # Stores the papers in data/corpus_ids.txt that aren't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
 # -u: print each line immediately, even when piped into tee
@@ -37,6 +39,9 @@ test-store:
 test-ingest:
 	$(PYTHON) -m pytest tests/test_scrape_papers.py -v
 
+test-retrieval:
+	$(PYTHON) -m pytest tests/test_retrieval.py -v
+
 parse:
 	$(PYTHON) -m src.arxiv_html $(PAPER)
 
@@ -48,3 +53,11 @@ embed:
 
 store:
 	$(PYTHON) -m src.vector_store $(PAPER)
+
+# top 10 papers (dense) and top 20 chunks (hybrid) from ./qdrant_data
+search:
+	$(PYTHON) -m src.retrieval $(if $(Q),"$(Q)")
+
+# also shows each chunk's rank and score in the dense-only and sparse-only searches
+search-explain:
+	$(PYTHON) -m src.retrieval --explain $(if $(Q),"$(Q)")
