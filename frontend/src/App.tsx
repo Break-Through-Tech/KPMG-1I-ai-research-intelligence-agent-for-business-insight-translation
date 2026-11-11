@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import kpmgBlueLogo from "./assets/kpmg-logo-blue.svg";
 import kpmgWhiteLogo from "./assets/kpmg-logo-white.svg";
 import Markdown from "react-markdown";
@@ -785,6 +785,28 @@ function Results({
   const resultPapers = papersFromResearch(data);
   const selectedSourceCount = data?.retrieved_chunks?.length ?? papers.length;
   const topRelevance = data?.top_score != null ? Math.round(data.top_score * 100) : 92;
+  const answerRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  // HTML keeps the formatting and paper links when pasted into email or docs; plain text is the fallback.
+  const copyAnswer = async () => {
+    const answer = answerRef.current;
+    if (!answer) return;
+    const html = answer.innerHTML;
+    const text = answer.innerText;
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([text], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(text);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
   return (
     <main className="page results-page">
@@ -796,9 +818,9 @@ function Results({
         <div className="question-label">Research question</div>
         <h1>{query}</h1>
         <div className="header-actions">
-          <button>
-            <Icon name="copy" size={15} />
-            Copy
+          <button onClick={copyAnswer} disabled={!data?.answer}>
+            <Icon name={copied ? "check" : "copy"} size={15} />
+            {copied ? "Copied" : "Copy"}
           </button>
           {/* Not connected to anything yet: no email or export.
           <button>
@@ -826,7 +848,7 @@ function Results({
               </div>
             </div>
             {data?.answer ? (
-              <div className="insight-answer">
+              <div className="insight-answer" ref={answerRef}>
                 <Markdown
                   components={{
                     a: ({ href, children }) => (
