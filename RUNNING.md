@@ -75,8 +75,8 @@ After each answer the agent suggests three follow-ups. Type a number to ask one,
 From code, pass the previous result's history back in:
 
 ```python
-first = run_agent("How can hallucination in LLMs be reduced?")
-second = run_agent("What are the limitations of paper 2?", first["history"])
+   first = run_agent("How can hallucination in LLMs be reduced?", thread_id="demo")
+   second = run_agent("What are the limitations of paper 2?", thread_id="demo")
 ```
 
 ## 4. Run the tests
