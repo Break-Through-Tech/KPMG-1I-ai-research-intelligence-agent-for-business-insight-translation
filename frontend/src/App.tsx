@@ -721,11 +721,13 @@ function PaperCard({
             {paper.authors} <span /> {paper.date} <span /> {paper.source}
           </p>
           <p className="abstract">{paper.abstract}</p>
+          {/* Repeats the passage text shown above.
           {!compact && (
             <blockquote>
               <span>Supporting evidence</span>“{paper.quote}”
             </blockquote>
           )}
+          */}
           {expanded && (
             <div className="expanded-details">
               <div>
