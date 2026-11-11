@@ -635,7 +635,8 @@ function RecommendedPaper({
 function Progress({ query }: { query: string }) {
   const [step, setStep] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setStep((s) => Math.min(s + 1, 3)), 330);
+    // The steps are only a timer, not the agent's real progress; an answer takes about a minute.
+    const id = setInterval(() => setStep((s) => Math.min(s + 1, 3)), 12000);
     return () => clearInterval(id);
   }, []);
   const steps = [
