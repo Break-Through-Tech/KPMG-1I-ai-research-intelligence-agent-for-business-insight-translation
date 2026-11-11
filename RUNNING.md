@@ -213,8 +213,14 @@ loaded the vector store. It returns:
 A failed search returns 503 and an LLM failure (for example Ollama not running) 502. Questions are answered one
 at a time, about a minute each; `thread_id` and `focus_areas` are accepted but not used yet.
 
-The React frontend is a separate Vite application. Keep the backend and frontend
-running in separate terminals:
+The React frontend is a separate Vite application. After `npm install` in `frontend/` once, start the API and
+the frontend together:
+
+```bash
+make dev
+```
+
+and open `http://localhost:5173`. Ctrl+C stops both. To run them in separate terminals instead:
 
 **Terminal 1 — FastAPI bridge**
 
@@ -227,10 +233,9 @@ running in separate terminals:
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev -- --port 5173
 ```
 
-Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
 Vite proxies `/api` requests to FastAPI on port 8000. The Streamlit fallback (`make ui`, port 8501) still calls
 the old agent and doesn't work.
 
