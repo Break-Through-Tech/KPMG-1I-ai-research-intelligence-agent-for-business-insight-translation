@@ -97,6 +97,14 @@ def ensure_ingestion_collections(client: QdrantClient):
                 client.create_payload_index(name, "arxiv_id", PayloadSchemaType.KEYWORD)
 
 
+def paper_is_stored(client: QdrantClient, arxiv_id: str) -> bool:
+    """True if the paper has its high-level record and at least one chunk."""
+    ensure_ingestion_collections(client)
+    if not client.retrieve(HIGH_LEVEL_COLLECTION, [point_id(arxiv_id)], with_payload=False):
+        return False
+    return client.count(CHUNK_COLLECTION, count_filter=_paper_filter(arxiv_id), exact=True).count > 0
+
+
 def store_paper_record(client: QdrantClient, paper: Paper):
     """Embed the paper's title + abstract and store it in papers_high_level."""
     ensure_ingestion_collections(client)

@@ -15,6 +15,7 @@ from src.vector_store import (
     HIGH_LEVEL_COLLECTION,
     SPARSE_VECTOR,
     ensure_ingestion_collections,
+    paper_is_stored,
     point_id,
     store_chunks,
     store_paper_record,
@@ -141,6 +142,15 @@ class TestChunks:
 
         assert len(chunk_payloads(client, "2608.20316v1")) == 2
         assert len(chunk_payloads(client, "2610.13767v1")) == 1
+
+    def test_paper_counts_as_stored_only_with_record_and_chunks(self, client, encoded):
+        assert not paper_is_stored(client, PAPER.paper_id)
+        store_paper_record(client, PAPER)
+        assert not paper_is_stored(client, PAPER.paper_id)  # record written, chunks not yet
+        store_chunks(client, OTHER, make_chunks(1))
+        assert not paper_is_stored(client, PAPER.paper_id)  # another paper's chunks don't count
+        store_chunks(client, PAPER, make_chunks(1))
+        assert paper_is_stored(client, PAPER.paper_id)
 
     def test_storing_no_chunks_removes_all_of_the_papers_chunks(self, client, encoded):
         store_chunks(client, OTHER, make_chunks(2))

@@ -2,10 +2,14 @@ PYTHON ?= ./venv/bin/python
 # arXiv id or saved HTML page for `make parse` / `make chunk` / `make embed` / `make store`
 PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
 
-.PHONY: ingest agent test test-parse test-chunk test-embed test-store parse chunk embed store
+.PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest parse chunk embed store
 
+# Stores every seen paper that isn't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
 ingest:
 	$(PYTHON) -m scripts.backfill_papers
+
+ingest-force:
+	$(PYTHON) -m scripts.backfill_papers --force
 
 agent:
 	$(PYTHON) -m src.agent
@@ -27,6 +31,9 @@ test-embed:
 
 test-store:
 	$(PYTHON) -m pytest tests/test_vector_store.py -v
+
+test-ingest:
+	$(PYTHON) -m pytest tests/test_scrape_papers.py -v
 
 parse:
 	$(PYTHON) -m src.arxiv_html $(PAPER)
