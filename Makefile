@@ -1,10 +1,10 @@
 PYTHON ?= ./venv/bin/python
 # arXiv id or saved HTML page for `make parse` / `make chunk` / `make embed` / `make store`
 PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
-# research question for `make search`; leave empty to type questions one after another
+# research question for `make search` / `make agent`; leave empty to type questions one after another
 Q ?=
 
-.PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest test-retrieval parse chunk embed store search search-explain
+.PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest test-retrieval test-agent parse chunk embed store search search-explain
 
 # Stores the papers in data/corpus_ids.txt that aren't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
 # -u: print each line immediately, even when piped into tee
@@ -15,8 +15,9 @@ ingest:
 ingest-force:
 	$(PYTHON) -u -m scripts.backfill_papers --force
 
+# answer with qwen2.5:7b through Ollama, from the top-ranked papers and chunks that fit in 6,000 tokens
 agent:
-	$(PYTHON) -m src.agent
+	$(PYTHON) -m src.agent $(if $(Q),"$(Q)")
 
 ui:
 	$(PYTHON) -m streamlit run app.py
@@ -41,6 +42,9 @@ test-ingest:
 
 test-retrieval:
 	$(PYTHON) -m pytest tests/test_retrieval.py -v
+
+test-agent:
+	$(PYTHON) -m pytest tests/test_agent.py -v
 
 parse:
 	$(PYTHON) -m src.arxiv_html $(PAPER)

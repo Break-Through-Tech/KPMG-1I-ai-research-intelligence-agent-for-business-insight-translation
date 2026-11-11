@@ -67,13 +67,7 @@ Check how many points are stored:
 
 Local Qdrant allows one process at a time, so don't run two ingests at once.
 
-## 3. The agent (temporarily unavailable)
-
-`make agent`, the Streamlit UI and the API's research endpoint don't work right now. They were built on the old
-abstract-only `papers` collection, which has been replaced by `papers_high_level` and `paper_chunks`. Searching the
-new collections and moving the agent over to them is the next piece of work.
-
-## 4. Run the tests
+## 3. Run the tests
 
 ```bash
 make test
@@ -88,12 +82,13 @@ make test-embed    # chunks -> dense and sparse vectors (uses the real models)
 make test-store    # vectors -> Qdrant collections (in-memory Qdrant)
 make test-ingest   # the whole pipeline, scraper and backfill
 make test-retrieval  # paper search and hybrid chunk search (in-memory Qdrant, fake encoders)
+make test-agent      # the LangGraph agent (fake searches and a fake LLM)
 ```
 
 arXiv and Qdrant are faked or in memory. The embedding tests load the real models, so they need them downloaded
 once (any `make ingest` or `make embed` run does that).
 
-## 5. Look at each stage's output
+## 4. Look at each stage's output
 
 These run one paper through the pipeline and print what each stage produces. Nothing is written to `qdrant_data/`.
 
@@ -111,7 +106,7 @@ any arXiv ID or saved HTML page:
 make chunk PAPER=2610.31552v1
 ```
 
-## 6. Search the vector store
+## 5. Search the vector store
 
 Two independent searches over what `make ingest` stored (`src/retrieval.py`):
 
@@ -148,6 +143,51 @@ also `dense_rank`, `dense_score`, `sparse_rank` and `sparse_score` (None when th
 chunk among its top 100). Result counts, the candidate pool and the RRF constant are arguments with defaults in
 `src/retrieval.py`. A missing collection or a Qdrant failure raises `RetrievalError`.
 
+## 6. Ask the agent
+
+The agent (`src/agent.py`) is a LangGraph graph that answers a question from what the two searches above return:
+
+1. `retrieve_papers` (top 10 papers) and `retrieve_chunks` (top 20 chunks) run in parallel on the same question.
+2. `assemble_context` waits for both and writes the results as two labelled sections: papers (rank, arXiv ID,
+   title, abstract) and passages (rank, arXiv ID, title, section, content type, text). Scores are left out.
+   It keeps only the highest-ranked whole papers and passages that fit in 6,000 tokens (`CONTEXT_TOKENS`,
+   counted with Qwen2.5's tokenizer, downloaded from Hugging Face on first use). Papers get the share of the
+   budget they take up in the full results and passages fill the rest, usually 3–4 papers and 9 passages.
+   Reading the prompt takes about 5 s per 1,000 tokens on a laptop, so this roughly halves the answer time
+   compared with all 10 papers and 20 passages.
+3. `generate_answer` sends the question and context to `qwen2.5:7b` through Ollama, with the instructions in
+   `src/prompts.py`: answer only from the context, keep evidence apart from interpretation, say when the context
+   isn't enough, and cite papers as `[Paper Title](https://arxiv.org/abs/<arxiv_id>)`. If both searches found
+   nothing, the LLM isn't called and the answer says so.
+
+Ollama must be running (the desktop app, or `ollama serve`) with `qwen2.5:7b` pulled (section 1).
+
+```bash
+make agent Q="How does quantization affect the inference speed and accuracy of large language models?"
+make agent    # no Q: type one question after another; blank line to quit
+```
+
+It prints the answer, the papers and passages the LLM was given, and the context size. An answer takes about a
+minute on a laptop.
+Like `make search`, don't run it while `make ingest` is running.
+
+From Python:
+
+```python
+from src.agent import run_agent
+
+state = run_agent("How does quantization affect the inference speed and accuracy of large language models?")
+state["answer"], state["paper_hits"], state["chunk_hits"], state["context"]
+```
+
+`paper_hits` and `chunk_hits` hold everything the searches returned; `context` holds only the part given to the
+LLM.
+
+A blank question raises `ValueError`, a Qdrant failure `RetrievalError`, and an LLM failure or empty answer
+`GenerationError`.
+
+The Streamlit UI (`make ui`) and the API's research endpoint still call the old agent and don't work yet.
+
 ## 7. Run commands without Make
 
 The Make targets are shortcuts for these commands:
@@ -156,12 +196,13 @@ The Make targets are shortcuts for these commands:
 ./venv/bin/python -m scripts.backfill_papers            # make ingest (add --force for make ingest-force)
 ./venv/bin/python -m pytest tests                       # make test
 ./venv/bin/python -m src.chunking <arxiv_id | page.html>   # make chunk (likewise src.arxiv_html, src.embeddings, src.vector_store)
+./venv/bin/python -m src.agent "question"               # make agent Q="question"
 ```
 
 ## 8. Run the Stage 1 React/FastAPI frontend
 
-The research endpoint fails until the agent moves to the new collections (see section 3); the rest of this
-section still applies.
+The research endpoint still calls the old agent and fails (see section 6); the rest of this section still
+applies.
 
 The React frontend is a separate Vite application. Keep the backend and frontend
 running in separate terminals:
