@@ -75,10 +75,12 @@ class TestSearchPapers:
         assert question_vector == ["How do I route queries?"]
 
     def test_result_carries_the_stored_paper_fields(self, client, question_vector):
-        add_paper(client, "2610.13767v1", axis(0), title="DualQuant", content="We introduce DualQuant.")
+        add_paper(client, "2610.13767v1", axis(0), title="DualQuant", content="We introduce DualQuant.",
+                  authors=["A. Author"], publish_date="2026-10-15", categories=["cs.LG"])
         [hit] = search_papers(client, "quantization")
         assert hit == PaperHit(arxiv_id="2610.13767v1", title="DualQuant", abstract="We introduce DualQuant.",
-                               score=pytest.approx(1.0), rank=1)
+                               score=pytest.approx(1.0), rank=1, authors=["A. Author"], publish_date="2026-10-15",
+                               categories=["cs.LG"])
 
     def test_top_k_limits_the_results(self, client, question_vector):
         for i in range(1, 15):
@@ -91,6 +93,7 @@ class TestSearchPapers:
                                                           payload={})])
         [hit] = search_papers(client, "q")
         assert (hit.arxiv_id, hit.title, hit.abstract) == ("", None, None)
+        assert (hit.authors, hit.publish_date, hit.categories) == ([], None, [])
 
     def test_empty_collection_gives_no_results(self, client, question_vector):
         assert search_papers(client, "q") == []
@@ -161,11 +164,13 @@ class TestSearchChunks:
 
     def test_result_carries_the_stored_chunk_fields(self, client, question_vector):
         add_chunk(client, "2610.13767v1_chunk_3", axis(0), arxiv_id="2610.13767v1", title="DualQuant",
-                  content="We quantize weights.", breadcrumb=["4 Method", "4.2 Scales"], chunk_index=3)
+                  content="We quantize weights.", breadcrumb=["4 Method", "4.2 Scales"], chunk_index=3,
+                  authors=["A. Author"], publish_date="2026-10-15", categories=["cs.LG"])
         [hit] = search_chunks(client, "q")
         assert hit == ChunkHit(chunk_id="2610.13767v1_chunk_3", arxiv_id="2610.13767v1", title="DualQuant",
                                content="We quantize weights.", breadcrumb=["4 Method", "4.2 Scales"],
-                               chunk_index=3, content_type="text", score=pytest.approx(1 / 60), rank=1)
+                               chunk_index=3, content_type="text", score=pytest.approx(1 / 60), rank=1,
+                               authors=["A. Author"], publish_date="2026-10-15", categories=["cs.LG"])
 
     def test_debug_fields_stay_empty_without_explain(self, chunks, question_vector):
         hit = search_chunks(chunks, "q")[0]
@@ -203,6 +208,7 @@ class TestSearchChunks:
         [hit] = search_chunks(client, "q")
         assert (hit.chunk_id, hit.arxiv_id, hit.content, hit.breadcrumb) == ("", "", "", [])
         assert (hit.title, hit.chunk_index, hit.content_type) == (None, None, None)
+        assert (hit.authors, hit.publish_date, hit.categories) == ([], None, [])
 
     def test_empty_collection_gives_no_results(self, client, question_vector):
         assert search_chunks(client, "q") == []
