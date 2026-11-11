@@ -50,6 +50,11 @@ class TestDenseEncoder:
         [expected] = get_dense_model().embed([f"search_document: {TEXT}"])
         assert np.allclose(vector, expected)
 
+    def test_vectors_come_back_in_input_order_whatever_the_lengths(self):
+        texts = [f"Paragraph about topic {i}. " * (20 - 2 * i) for i in range(10)]  # longest first
+        expected = [get_dense_model().embed([f"search_document: {t}"]).__next__() for t in texts]
+        assert all(np.allclose(v, e, atol=1e-5) for v, e in zip(embed_documents(texts), expected))
+
     def test_related_documents_are_closer_than_unrelated_ones(self):
         quant, quant2, cooking = embed_documents([
             "Post-training quantization of LLM weights to 4-bit integers.",

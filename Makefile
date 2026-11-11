@@ -5,11 +5,13 @@ PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
 .PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest parse chunk embed store
 
 # Stores the papers in data/corpus_ids.txt that aren't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
+# -u: print each line immediately, even when piped into tee
 ingest:
-	$(PYTHON) -m scripts.backfill_papers
+	$(PYTHON) -u -m scripts.backfill_papers
 
+# re ingest all documents
 ingest-force:
-	$(PYTHON) -m scripts.backfill_papers --force
+	$(PYTHON) -u -m scripts.backfill_papers --force
 
 agent:
 	$(PYTHON) -m src.agent

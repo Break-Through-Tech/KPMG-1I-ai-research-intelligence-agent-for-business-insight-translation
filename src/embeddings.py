@@ -15,6 +15,7 @@ DENSE_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 DENSE_VECTOR_SIZE = 768
 # Nomic is trained with these task prefixes; documents and queries must use the matching one.
 DOCUMENT_PREFIX = "search_document: "
+DENSE_BATCH_SIZE = 8
 SPARSE_MODEL_NAME = "Qdrant/bm25"
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
@@ -74,7 +75,15 @@ def sparse_chunk_text(breadcrumb: list[str], text: str) -> str:
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    return [vector.tolist() for vector in get_dense_model().embed([DOCUMENT_PREFIX + t for t in texts])]
+    # Each batch is padded to its longest text and attention grows with length squared, so one
+    # long chunk in a big batch makes every chunk slow and can exhaust memory. Embedding small
+    # batches of similar length avoids that and gives the same vectors.
+    order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+    embedded = get_dense_model().embed([DOCUMENT_PREFIX + texts[i] for i in order], batch_size=DENSE_BATCH_SIZE)
+    vectors: list[list[float]] = [[] for _ in texts]
+    for i, vector in zip(order, embedded):
+        vectors[i] = vector.tolist()
+    return vectors
 
 
 def embed_sparse(texts: list[str]) -> list[SparseVector]:
