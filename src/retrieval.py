@@ -10,7 +10,7 @@ question or no matches gives an empty list; a missing collection or a Qdrant fai
 RetrievalError, so callers can tell an outage apart from "nothing relevant".
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Prefetch, Rrf, RrfQuery, ScoredPoint
@@ -35,6 +35,9 @@ class PaperHit:
     abstract: str | None
     score: float  # cosine similarity between the question and the paper's title + abstract
     rank: int     # 1-based
+    authors: list[str] = field(default_factory=list)
+    publish_date: str | None = None  # ISO date, e.g. "2026-10-15"
+    categories: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -48,6 +51,9 @@ class ChunkHit:
     content_type: str | None
     score: float  # RRF score; only the order matters, not the size
     rank: int     # 1-based position in the fused results
+    authors: list[str] = field(default_factory=list)
+    publish_date: str | None = None  # ISO date, e.g. "2026-10-15"
+    categories: list[str] = field(default_factory=list)
     # Filled only with explain=True. A rank is None if that search didn't have the chunk among
     # its HYBRID_CANDIDATES; dense scores are cosine similarities, sparse scores BM25 scores.
     dense_rank: int | None = None
@@ -89,6 +95,9 @@ def search_papers(
             abstract=p.payload.get("content"),
             score=p.score,
             rank=rank,
+            authors=p.payload.get("authors", []),
+            publish_date=p.payload.get("publish_date"),
+            categories=p.payload.get("categories", []),
         )
         for rank, p in enumerate(points, start=1)
     ]
@@ -146,6 +155,9 @@ def search_chunks(
             content_type=p.payload.get("content_type"),
             score=p.score,
             rank=rank,
+            authors=p.payload.get("authors", []),
+            publish_date=p.payload.get("publish_date"),
+            categories=p.payload.get("categories", []),
         )
         if explain:
             hit.dense_rank, hit.dense_score = ranks[DENSE_VECTOR].get(p.id, (None, None))
