@@ -20,7 +20,7 @@ def test_research_adapts_existing_result_schema(monkeypatch) -> None:
     monkeypatch.setattr(
         research_route,
         "run_agent",
-        lambda query: {
+        lambda query, thread_id=None: {
             "answer": f"Answer for {query}",
             "confidence": "high",
             "top_score": 0.78,
@@ -80,7 +80,7 @@ def test_research_rejects_blank_query() -> None:
 
 
 def test_research_returns_gateway_error_when_backend_fails(monkeypatch) -> None:
-    def fail(_query):
+    def fail(_query, _thread_id=None):
         raise RuntimeError("backend unavailable")
 
     monkeypatch.setattr(research_route, "run_agent", fail)
