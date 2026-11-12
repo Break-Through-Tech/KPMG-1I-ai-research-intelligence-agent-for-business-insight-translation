@@ -14,10 +14,11 @@ from src.retrieval import RetrievalError
 client = TestClient(app)
 
 PAPER = {"arxiv_id": "2610.13767v1", "title": "DualQuant", "abstract": "We quantize LLMs to 4 bits.",
-         "score": 0.8, "rank": 1}
+         "score": 0.8, "rank": 1, "authors": ["A. Author"], "publish_date": "2026-10-15", "categories": ["cs.LG"]}
 CHUNK = {"chunk_id": "2610.29544v1_chunk_3", "arxiv_id": "2610.29544v1", "title": "RISK-KV",
          "content": "Selective KV reconstruction.", "breadcrumb": ["3 Method", "3.2 Selection"], "chunk_index": 3,
-         "content_type": "text", "score": 0.03, "rank": 1}
+         "content_type": "text", "score": 0.03, "rank": 1, "authors": ["B. Author", "C. Author"],
+         "publish_date": "2026-10-29", "categories": ["cs.CL"]}
 STATE = {"query": "q", "paper_hits": [PAPER, {**PAPER, "rank": 2}], "chunk_hits": [CHUNK, {**CHUNK, "rank": 2}],
          "context": "ctx", "answer": "DualQuant reaches 4 bits [DualQuant](https://arxiv.org/abs/2610.13767v1)."}
 
@@ -49,10 +50,12 @@ def test_research_returns_the_answer_and_what_the_llm_was_given(monkeypatch) -> 
     assert response.json() == {
         "answer": STATE["answer"],
         "papers": [{"arxiv_id": "2610.13767v1", "title": "DualQuant", "abstract": "We quantize LLMs to 4 bits.",
-                    "url": "https://arxiv.org/abs/2610.13767v1", "rank": 1}],
+                    "url": "https://arxiv.org/abs/2610.13767v1", "rank": 1, "authors": ["A. Author"],
+                    "publish_date": "2026-10-15", "categories": ["cs.LG"]}],
         "retrieved_chunks": [{"paper_id": "2610.29544v1", "title": "RISK-KV", "section_title": "3 Method > 3.2 Selection",
                               "chunk_text": "Selective KV reconstruction.", "chunk_index": 3, "score": 0.03,
-                              "url": "https://arxiv.org/abs/2610.29544v1"}],
+                              "url": "https://arxiv.org/abs/2610.29544v1", "authors": ["B. Author", "C. Author"],
+                              "publish_date": "2026-10-29", "categories": ["cs.CL"]}],
     }
 
 

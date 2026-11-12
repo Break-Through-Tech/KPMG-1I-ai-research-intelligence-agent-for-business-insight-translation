@@ -32,6 +32,10 @@ def _arxiv_url(arxiv_id: str) -> str:
     return f"https://arxiv.org/abs/{arxiv_id}"
 
 
+def _metadata(hit: dict[str, Any]) -> dict[str, Any]:
+    return {"authors": hit["authors"], "publish_date": hit["publish_date"], "categories": hit["categories"]}
+
+
 @router.post("/api/research", response_model=ResearchResponse, response_model_exclude_none=True)
 def research(request: ResearchRequest) -> ResearchResponse:
     # thread_id and focus_areas are accepted for frontend compatibility but not used: the agent answers each
@@ -53,13 +57,13 @@ def research(request: ResearchRequest) -> ResearchResponse:
         answer=state["answer"],
         papers=[
             {"arxiv_id": hit["arxiv_id"], "title": hit["title"], "abstract": hit["abstract"],
-             "url": _arxiv_url(hit["arxiv_id"]), "rank": hit["rank"]}
+             "url": _arxiv_url(hit["arxiv_id"]), "rank": hit["rank"], **_metadata(hit)}
             for hit in papers
         ],
         retrieved_chunks=[
             {"paper_id": hit["arxiv_id"], "title": hit["title"], "section_title": " > ".join(hit["breadcrumb"]),
              "chunk_text": hit["content"], "chunk_index": hit["chunk_index"], "score": hit["score"],
-             "url": _arxiv_url(hit["arxiv_id"])}
+             "url": _arxiv_url(hit["arxiv_id"]), **_metadata(hit)}
             for hit in chunks
         ],
     )

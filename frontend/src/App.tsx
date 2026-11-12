@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import kpmgBlueLogo from "./assets/kpmg-logo-blue.svg";
 import kpmgWhiteLogo from "./assets/kpmg-logo-white.svg";
 import Markdown from "react-markdown";
@@ -201,21 +201,38 @@ const papers = [
   },
 ];
 
-type Paper = (typeof papers)[number];
+type Paper = Omit<(typeof papers)[number], "relevance"> & { relevance?: number; rank?: number };
+
+function formatAuthors(authors?: string[]): string {
+  if (!authors?.length) return "Authors unavailable";
+  return authors.length > 3 ? `${authors.slice(0, 3).join(", ")} et al.` : authors.join(", ");
+}
+
+// publish_date is a calendar date ("2026-08-20"); UTC keeps it from shifting a day in US time zones.
+function formatDate(isoDate?: string | null): string {
+  if (!isoDate) return "—";
+  return new Date(isoDate).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
 
 function papersFromResearch(data: ResearchResponse | null): Paper[] {
   const chunks = data?.retrieved_chunks;
   if (!chunks?.length) return papers;
 
-  return chunks.map((chunk) => {
+  // The API returns the passages in search order, and the ones given to the LLM are always the top-ranked ones.
+  return chunks.map((chunk, index) => {
     const citation = data?.citations?.find((item) => item.paper_id === chunk.paper_id);
     return {
       title: chunk.title || "Research source",
-      authors: "Metadata unavailable",
-      date: "—",
+      authors: formatAuthors(chunk.authors),
+      date: formatDate(chunk.publish_date),
       source: chunk.paper_id || "Research source",
       category: chunk.section_title || "Research source",
-      relevance: Math.round((chunk.score ?? 0) * 100),
+      rank: index + 1,
       abstract: chunk.chunk_text || "",
       quote: citation?.supporting_quote || chunk.chunk_text || "",
     };
@@ -304,6 +321,7 @@ function Sidebar({
           </button>
         ))}
       </nav>
+      {/* Not connected to anything yet: no research history, saved items, system status or user accounts.
       <div className="nav-label nav-label-spaced">Your workspace</div>
       <nav>
         <button
@@ -334,6 +352,7 @@ function Sidebar({
           </div>
         </div>
       </div>
+      */}
     </aside>
   );
 }
@@ -366,10 +385,12 @@ function Topbar({
         >
           <Icon name={dark ? "sun" : "moon"} />
         </button>
+        {/* No user accounts yet.
         <button className="profile-control" title="Account">
           <span>AC</span>
           <Icon name="down" size={13} />
         </button>
+        */}
       </div>
     </header>
   );
@@ -631,7 +652,8 @@ function RecommendedPaper({
 function Progress({ query }: { query: string }) {
   const [step, setStep] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setStep((s) => Math.min(s + 1, 3)), 330);
+    // The steps are only a timer, not the agent's real progress; an answer takes about a minute.
+    const id = setInterval(() => setStep((s) => Math.min(s + 1, 3)), 12000);
     return () => clearInterval(id);
   }, []);
   const steps = [
@@ -702,25 +724,36 @@ function PaperCard({
   return (
     <article className={`paper-card ${compact ? "paper-compact" : ""}`}>
       <div className="paper-card-body">
-        <PaperThumbnail index={papers.indexOf(paper) < 0 ? 1 : papers.indexOf(paper)} />
+        <PaperThumbnail
+          index={(papers as Paper[]).indexOf(paper) < 0 ? 1 : (papers as Paper[]).indexOf(paper)}
+        />
         <div className="paper-main">
           <div className="paper-top">
             <span className="category-badge">{paper.category}</span>
-            <div className="relevance">
-              <span>Relevance</span>
-              <strong>{paper.relevance}%</strong>
-            </div>
+            {paper.rank != null ? (
+              <div className="relevance">
+                <span>Rank</span>
+                <strong>#{paper.rank}</strong>
+              </div>
+            ) : (
+              <div className="relevance">
+                <span>Relevance</span>
+                <strong>{paper.relevance}%</strong>
+              </div>
+            )}
           </div>
           <h3 onClick={openPaper}>{paper.title}</h3>
           <p className="paper-meta">
             {paper.authors} <span /> {paper.date} <span /> {paper.source}
           </p>
           <p className="abstract">{paper.abstract}</p>
+          {/* Repeats the passage text shown above.
           {!compact && (
             <blockquote>
               <span>Supporting evidence</span>“{paper.quote}”
             </blockquote>
           )}
+          */}
           {expanded && (
             <div className="expanded-details">
               <div>
@@ -778,6 +811,28 @@ function Results({
   const resultPapers = papersFromResearch(data);
   const selectedSourceCount = data?.retrieved_chunks?.length ?? papers.length;
   const topRelevance = data?.top_score != null ? Math.round(data.top_score * 100) : 92;
+  const answerRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  // HTML keeps the formatting and paper links when pasted into email or docs; plain text is the fallback.
+  const copyAnswer = async () => {
+    const answer = answerRef.current;
+    if (!answer) return;
+    const html = answer.innerHTML;
+    const text = answer.innerText;
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([text], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(text);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
   return (
     <main className="page results-page">
@@ -789,10 +844,11 @@ function Results({
         <div className="question-label">Research question</div>
         <h1>{query}</h1>
         <div className="header-actions">
-          <button>
-            <Icon name="copy" size={15} />
-            Copy
+          <button onClick={copyAnswer} disabled={!data?.answer}>
+            <Icon name={copied ? "check" : "copy"} size={15} />
+            {copied ? "Copied" : "Copy"}
           </button>
+          {/* Not connected to anything yet: no email or export.
           <button>
             <Icon name="mail" size={15} />
             Email finding
@@ -801,6 +857,7 @@ function Results({
             <Icon name="share" size={15} />
             Export
           </button>
+          */}
         </div>
       </div>
       <DemoNotice />
@@ -817,7 +874,7 @@ function Results({
               </div>
             </div>
             {data?.answer ? (
-              <div className="insight-answer">
+              <div className="insight-answer" ref={answerRef}>
                 <Markdown
                   components={{
                     a: ({ href, children }) => (
