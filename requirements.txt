@@ -8,6 +8,8 @@ langchain-core
 requests
 beautifulsoup4
 streamlit
+fastapi
+uvicorn[standard]
 arxiv
 pytest
 langgraph-checkpoint-sqlite

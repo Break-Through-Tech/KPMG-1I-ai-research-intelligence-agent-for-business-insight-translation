@@ -12,3 +12,4 @@ data/*.pdf
 chat_memory.sqlite
 chat_memory.sqlite-shm
 chat_memory.sqlite-wal
+frontend/node_modules/
