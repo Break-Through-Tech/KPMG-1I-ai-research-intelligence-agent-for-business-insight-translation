@@ -170,7 +170,7 @@ follow_up_prompt = ChatPromptTemplate.from_messages([
     ("human", "New message: {question}"),
 ])
 
-def decide_follow_up(inputs: dict) -> FollowUpDecision | None:
+def decide_follow_up(inputs: dict) -> Optional[FollowUpDecision]:
     structured_llm = llm.with_structured_output(FollowUpDecision, include_raw=True)
     return (follow_up_prompt | structured_llm).invoke(inputs)["parsed"]
 
