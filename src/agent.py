@@ -6,6 +6,16 @@ from langchain_core.prompts import ChatPromptTemplate
 from src.arxiv_html import fetch_sections
 from src.embeddings import get_model
 from src.vector_store import get_client, semantic_search
+from src.followup import (
+    FOLLOW_UP_SYSTEM_PROMPT,
+    NEW_SEARCH,
+    SAME_PAPERS,
+    FollowUpDecision,
+    add_turn,
+    make_turn,
+    plan_follow_up,
+    suggest_follow_ups,
+)
 from pydantic import BaseModel, Field
 import re
 
@@ -20,7 +30,6 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage,
 )
-from langchain_core.prompts import MessagesPlaceholder
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -50,7 +59,10 @@ def assess_confidence(chunks: list[dict]) -> tuple[str, float]:
     return "low", top
 
 class AgentState(TypedDict): #adding one field to the agent state for citation 
+    # The standalone question every node works with. For a follow-up this is
+    # the rewritten question, not what the user typed (see src/followup.py).
     query: str
+    original_query: str
     is_valid: bool
     suggested_query: str
     document_ids: list[str]
@@ -63,7 +75,16 @@ class AgentState(TypedDict): #adding one field to the agent state for citation
 
     # Stores conversation messages across turns
     messages: Annotated[list[AnyMessage], add_messages]
-    
+
+    # Follow-up handling (src/followup.py). `history` is saved by the
+    # checkpointer with the rest of the state, so it carries over between
+    # run_agent calls with the same thread_id. Unlike `messages`, it keeps the
+    # papers shown and their fetched sections, which follow-ups reuse.
+    history: list[dict]
+    route: str
+    focus_paper_ids: list[str]
+    exclude_paper_ids: list[str]
+    follow_up_suggestions: list[str]
 
 
 class Claim(BaseModel):#output structure 
@@ -144,41 +165,50 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
-contextualize_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "Rewrite the user's latest question as a standalone research "
-        "question using the conversation history when needed. "
-        "If the latest question is already clear or introduces a new "
-        "topic, keep its meaning unchanged. Do not answer the question. "
-        "Return only the rewritten question."
-    ),
-    MessagesPlaceholder(variable_name="history"),
-    ("human", "{question}"),
+follow_up_prompt = ChatPromptTemplate.from_messages([
+    ("system", FOLLOW_UP_SYSTEM_PROMPT),
+    ("human", "New message: {question}"),
 ])
 
+def decide_follow_up(inputs: dict) -> Optional[FollowUpDecision]:
+    structured_llm = llm.with_structured_output(FollowUpDecision, include_raw=True)
+    return (follow_up_prompt | structured_llm).invoke(inputs)["parsed"]
 
 def contextualize_query(state: AgentState):
-    messages = state.get("messages", [])
+    """Rewrite a follow-up as a standalone question and pick its route.
 
-    # The latest message is the question just submitted.
-    history = messages[:-1]
-
-    # No previous conversation: use the question as written.
-    if not history:
-        return {"query": state["query"]}
-
-    chain = contextualize_prompt | small_llm
-
-    result = chain.invoke({
-        "history": history,
-        "question": state["query"],
-    })
-
-    standalone_query = result.content.strip()
-
+    One step does both: rewriting the question using the conversation, and
+    deciding whether to answer from the papers already shown or search again.
+    """
+    plan = plan_follow_up(state["original_query"], state.get("history", []), decide_follow_up)
     return {
-        "query": standalone_query or state["query"]
+        "query": plan.standalone_query,
+        "route": plan.route,
+        "focus_paper_ids": plan.focus_paper_ids,
+        "exclude_paper_ids": plan.exclude_paper_ids,
+    }
+
+def route_after_contextualize(state: AgentState):
+    # A question about papers already shown is on topic by definition, so it
+    # skips validation (which could reject short ones like "explain paper 2").
+    if state["route"] == SAME_PAPERS:
+        return "reuse_papers"
+    return "validate_question"
+
+def reuse_papers(state: AgentState):
+    """Answer from the papers already shown instead of searching again."""
+    last = state["history"][-1]
+    focus = set(state["focus_paper_ids"])
+    papers = [p for p in last["papers"] if not focus or p["paper_id"] in focus]
+    paper_ids = {p["paper_id"] for p in papers}
+    return {
+        "document_ids": [p["paper_id"] for p in papers],
+        "retrieved_chunks": papers,
+        "paper_sections": {
+            pid: sections
+            for pid, sections in last["paper_sections"].items()
+            if pid in paper_ids
+        },
     }
 
 def validate_question(state: AgentState):
@@ -220,14 +250,19 @@ def validate_question(state: AgentState):
 def route_after_validation(state: AgentState):
     if state["is_valid"]:
         return "retrieve_vectors"
-    return END
+    return "remember_turn"
 
 def retrieve_vectors(state: AgentState):
+    top_k = 3
+    exclude = set(state.get("exclude_paper_ids") or [])
     client = get_client("./qdrant_data")
     try:
-        results = semantic_search(client, query=state["query"], top_k=3)
+        # Ask for extra results so there are still top_k left after dropping
+        # papers the user has already seen.
+        results = semantic_search(client, query=state["query"], top_k=top_k + len(exclude))
     finally:
         client.close()
+    results = [r for r in results if r["paper_id"] not in exclude][:top_k]
     confidence, top_score = assess_confidence(results)
     return {
         "document_ids": [result["paper_id"] for result in results],
@@ -343,31 +378,58 @@ def finish_low_confidence(state: AgentState):
         "messages": [AIMessage(content=answer)],
     }
 
-graph = StateGraph(AgentState)
+def remember_turn(state: AgentState):
+    """Add this question and answer to the saved history and suggest follow-ups.
 
-graph.add_node("contextualize_query", contextualize_query)
-graph.add_node("validate_question", validate_question)       
-graph.add_node("retrieve_vectors", retrieve_vectors)
-graph.add_node("retrieve_sections", retrieve_sections)
-graph.add_node("generate_answer", generate_answer)
-graph.add_node("finish_low_confidence", finish_low_confidence)
-graph.add_edge(START, "contextualize_query")
-graph.add_edge("contextualize_query", "validate_question")
+    Every path through the graph ends here, so the history the checkpointer
+    saves always includes the latest turn.
+    """
+    history = state.get("history", [])
+    answered_from_papers = state["route"] == SAME_PAPERS or (
+        state["is_valid"] and state["confidence"] != "low"
+    )
+    if not answered_from_papers:
+        # The question was rejected or the papers found were a poor match, so
+        # there is nothing for "paper 2" to refer to in the next question.
+        state = {**state, "retrieved_chunks": [], "paper_sections": {}}
+    new_history = add_turn(history, make_turn(state, history))
+    return {
+        "history": new_history,
+        "follow_up_suggestions": suggest_follow_ups(new_history),
+    }
 
-graph.add_conditional_edges("validate_question", route_after_validation,
-                            {"retrieve_vectors": "retrieve_vectors",
-                             END: END,
-                            },
+builder = StateGraph(AgentState)
+
+builder.add_node("contextualize_query", contextualize_query)
+builder.add_node("validate_question", validate_question)
+builder.add_node("reuse_papers", reuse_papers)
+builder.add_node("retrieve_vectors", retrieve_vectors)
+builder.add_node("retrieve_sections", retrieve_sections)
+builder.add_node("generate_answer", generate_answer)
+builder.add_node("finish_low_confidence", finish_low_confidence)
+builder.add_node("remember_turn", remember_turn)
+
+builder.add_edge(START, "contextualize_query")
+builder.add_conditional_edges(
+    "contextualize_query",
+    route_after_contextualize,
+    {"reuse_papers": "reuse_papers", "validate_question": "validate_question"},
 )
-graph.add_conditional_edges(
+builder.add_conditional_edges(
+    "validate_question",
+    route_after_validation,
+    {"retrieve_vectors": "retrieve_vectors", "remember_turn": "remember_turn"},
+)
+builder.add_edge("reuse_papers", "generate_answer")
+builder.add_conditional_edges(
     "retrieve_vectors",
     route_after_retrieval,
-    {"retrieve_sections": "retrieve_sections", END: "finish_low_confidence",
-    },
+    {"retrieve_sections": "retrieve_sections", END: "finish_low_confidence"},
 )
-graph.add_edge("retrieve_sections", "generate_answer")
-graph.add_edge("generate_answer", END)
-graph.add_edge("finish_low_confidence", END)
+builder.add_edge("retrieve_sections", "generate_answer")
+builder.add_edge("generate_answer", "remember_turn")
+builder.add_edge("finish_low_confidence", "remember_turn")
+builder.add_edge("remember_turn", END)
 
 # Persistent conversation storage
 connection = sqlite3.connect(
@@ -378,10 +440,16 @@ connection = sqlite3.connect(
 checkpointer = SqliteSaver(connection)
 checkpointer.setup()
 
-graph = graph.compile(checkpointer=checkpointer)
+graph = builder.compile(checkpointer=checkpointer)
 
 def run_agent(query: str, thread_id: Optional[str] = None) -> AgentState:
+    """Answer one question. Use the same thread_id to ask follow-ups.
 
+    The checkpointer keeps `messages` and `history` for each thread_id. Every
+    other field is per question, so it is reset here; otherwise the checkpoint
+    would hand back the previous question's papers and citations whenever this
+    one ends early (e.g. it fails validation).
+    """
     if thread_id is None:
         thread_id = str(uuid.uuid4())
 
@@ -390,39 +458,87 @@ def run_agent(query: str, thread_id: Optional[str] = None) -> AgentState:
             "thread_id": thread_id
         }
     }
-    return graph.invoke(
+    result = graph.invoke(
         {
             "query": query,
+            "original_query": query,
             "messages": [
                 HumanMessage(content=query)
             ],
+            "is_valid": True,
+            "suggested_query": "",
+            "route": NEW_SEARCH,
+            "focus_paper_ids": [],
+            "exclude_paper_ids": [],
+            "document_ids": [],
+            "retrieved_chunks": [],
+            "paper_sections": {},
+            "answer": "",
+            "citations": [],
+            "confidence": "",
+            "top_score": 0.0,
+            "follow_up_suggestions": [],
         },
         config=config,
     )
+    result["thread_id"] = thread_id
+    return result
 
 def show(result):
-    print("\nAnswer:")
-    print(result["answer"])
-    print("\nSources:")
-    for citation in result["citations"]:
-        print(f"- Paper ID: {citation['paper_id']}")
-        print(f'  Supporting quote: "{citation["supporting_quote"]}"')
-
-    print("\nRetrieved papers:")
-    for rank, paper in enumerate(result["retrieved_chunks"], start=1):
-        preview = paper["chunk_text"][:100].replace("\n", " ")
-        print(f"\nRank: {rank}")
-        print(f"Paper ID: {paper['paper_id']}")
-        print(f"Title: {paper['title']}")
-        print(f"Cosine similarity: {paper['score']:.1%}")
-        print(f"Abstract preview: {preview}...")
-
-if __name__ == "__main__":
-    query = input("Enter your research query: ").strip()
-    result = run_agent(query)
+    if result["query"] != result["original_query"]:
+        print(f"\n(Understood as: {result['query']})")
 
     if result["confidence"] == "low":
         print(f"\nWarning: low confidence ({result['top_score']:.0%}). "
               "The papers found may not match your question well.")
-    else:
+        return
+
+    shown = result["history"][-1]["papers"]
+    if result["route"] == SAME_PAPERS:
+        ranks = [str(rank) for rank, p in enumerate(shown, start=1) if p["paper_id"] in result["document_ids"]]
+        print(f"(Answered from paper(s) {', '.join(ranks)} shown earlier)")
+
+    print("\nAnswer:")
+    print(result["answer"])
+    if result["citations"]:
+        print("\nSources:")
+    for citation in result["citations"]:
+        print(f"- Paper ID: {citation['paper_id']}")
+        print(f'  Supporting quote: "{citation["supporting_quote"]}"')
+
+    if result["route"] == NEW_SEARCH and shown:
+        print("\nRetrieved papers:")
+        for rank, paper in enumerate(shown, start=1):
+            preview = paper["chunk_text"][:100].replace("\n", " ")
+            print(f"\n[{rank}] {paper['title']}")
+            print(f"    Paper ID: {paper['paper_id']}")
+            print(f"    Cosine similarity: {paper['score']:.1%}")
+            print(f"    Abstract preview: {preview}...")
+
+    if result["follow_up_suggestions"]:
+        print("\nYou could ask next:")
+        for number, suggestion in enumerate(result["follow_up_suggestions"], start=1):
+            print(f"  {number}. {suggestion}")
+
+def run_chat() -> None:
+    print("Ask a research question. Then ask a follow-up, or type a suggestion's number.")
+    print("Type /new to start a new conversation, or press Enter on an empty line to quit.")
+    thread_id = str(uuid.uuid4())
+    suggestions: list[str] = []
+    while True:
+        text = input("\nYou: ").strip()
+        if not text:
+            return
+        if text.lower() == "/new":
+            thread_id, suggestions = str(uuid.uuid4()), []
+            print("Started a new conversation.")
+            continue
+        if text.isdigit() and 1 <= int(text) <= len(suggestions):
+            text = suggestions[int(text) - 1]
+            print(f"You: {text}")
+        result = run_agent(text, thread_id=thread_id)
         show(result)
+        suggestions = result["follow_up_suggestions"]
+
+if __name__ == "__main__":
+    run_chat()
