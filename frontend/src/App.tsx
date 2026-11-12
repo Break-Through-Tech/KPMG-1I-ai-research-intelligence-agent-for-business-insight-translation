@@ -201,7 +201,7 @@ const papers = [
   },
 ];
 
-type Paper = (typeof papers)[number];
+type Paper = Omit<(typeof papers)[number], "relevance"> & { relevance?: number; rank?: number };
 
 function formatAuthors(authors?: string[]): string {
   if (!authors?.length) return "Authors unavailable";
@@ -223,7 +223,8 @@ function papersFromResearch(data: ResearchResponse | null): Paper[] {
   const chunks = data?.retrieved_chunks;
   if (!chunks?.length) return papers;
 
-  return chunks.map((chunk) => {
+  // The API returns the passages in search order, and the ones given to the LLM are always the top-ranked ones.
+  return chunks.map((chunk, index) => {
     const citation = data?.citations?.find((item) => item.paper_id === chunk.paper_id);
     return {
       title: chunk.title || "Research source",
@@ -231,7 +232,7 @@ function papersFromResearch(data: ResearchResponse | null): Paper[] {
       date: formatDate(chunk.publish_date),
       source: chunk.paper_id || "Research source",
       category: chunk.section_title || "Research source",
-      relevance: Math.round((chunk.score ?? 0) * 100),
+      rank: index + 1,
       abstract: chunk.chunk_text || "",
       quote: citation?.supporting_quote || chunk.chunk_text || "",
     };
@@ -723,14 +724,23 @@ function PaperCard({
   return (
     <article className={`paper-card ${compact ? "paper-compact" : ""}`}>
       <div className="paper-card-body">
-        <PaperThumbnail index={papers.indexOf(paper) < 0 ? 1 : papers.indexOf(paper)} />
+        <PaperThumbnail
+          index={(papers as Paper[]).indexOf(paper) < 0 ? 1 : (papers as Paper[]).indexOf(paper)}
+        />
         <div className="paper-main">
           <div className="paper-top">
             <span className="category-badge">{paper.category}</span>
-            <div className="relevance">
-              <span>Relevance</span>
-              <strong>{paper.relevance}%</strong>
-            </div>
+            {paper.rank != null ? (
+              <div className="relevance">
+                <span>Rank</span>
+                <strong>#{paper.rank}</strong>
+              </div>
+            ) : (
+              <div className="relevance">
+                <span>Relevance</span>
+                <strong>{paper.relevance}%</strong>
+              </div>
+            )}
           </div>
           <h3 onClick={openPaper}>{paper.title}</h3>
           <p className="paper-meta">
