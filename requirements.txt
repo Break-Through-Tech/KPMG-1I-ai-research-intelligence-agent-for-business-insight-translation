@@ -12,3 +12,5 @@ fastapi
 uvicorn[standard]
 arxiv
 pytest
+langgraph-checkpoint-sqlite
+
