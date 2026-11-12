@@ -7,4 +7,10 @@ qdrant_data/
 
 # We no longer store PDFs in git
 data/*.pdf
+
 frontend/node_modules/
+
+# To keep each developer's local chat database out of the shared repository.
+chat_memory.sqlite
+chat_memory.sqlite-shm
+chat_memory.sqlite-wal
