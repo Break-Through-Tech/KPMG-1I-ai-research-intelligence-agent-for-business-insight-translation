@@ -763,6 +763,37 @@ function PaperCard({
   );
 }
 
+function emailFinding(query: string, data: ResearchResponse | null) {
+  const papers = data?.retrieved_chunks ?? [];
+
+  const paperTitles = [...new Set(
+    papers.map((paper) => paper.title).filter(Boolean)
+  )];
+
+  const subject = `Research Finding: ${query}`;
+
+// email body 
+  const body = [
+    "Hello,",
+    "",
+    "I wanted to share this research finding with you.",
+    "",
+    "Research Question:",
+    query,
+    "",
+    "Executive Insight:",
+    data?.answer ?? "No executive insight available.",
+    "",
+    "Relevant Research Papers:",
+    ...paperTitles.map((title, index) => `${index + 1}. ${title}`),
+    "",
+    "Best regards,",
+  ].join("\n");
+
+  const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  window.location.href = mailto;
+}
 function Results({
   query,
   data,
@@ -792,7 +823,7 @@ function Results({
             <Icon name="copy" size={15} />
             Copy
           </button>
-          <button>
+          <button onClick={() => emailFinding(query, data)}>
             <Icon name="mail" size={15} />
             Email finding
           </button>
