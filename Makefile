@@ -4,7 +4,7 @@ PAPER ?= tests/fixtures/arxiv_html/dualquant_2610.13767v1.html
 # research question for `make search` / `make agent`; leave empty to type questions one after another
 Q ?=
 
-.PHONY: ingest ingest-force agent test test-parse test-chunk test-embed test-store test-ingest test-retrieval test-agent parse chunk embed store search search-explain
+.PHONY: ingest ingest-force agent dev ui test test-parse test-chunk test-embed test-store test-ingest test-retrieval test-agent parse chunk embed store search search-explain
 
 # Stores the papers in data/corpus_ids.txt that aren't in Qdrant yet (QDRANT_URL if set, else ./qdrant_data).
 # -u: print each line immediately, even when piped into tee
@@ -18,6 +18,13 @@ ingest-force:
 # answer with qwen2.5:7b through Ollama, from the top-ranked papers and chunks that fit in 6,000 tokens
 agent:
 	$(PYTHON) -m src.agent $(if $(Q),"$(Q)")
+
+# FastAPI on :8000 and the React frontend on :5173 (open that one); Ctrl+C stops both
+dev:
+	@trap 'kill $$(jobs -p) 2>/dev/null' INT TERM EXIT; \
+	$(PYTHON) -m uvicorn api.main:app --reload --port 8000 & \
+	npm --prefix frontend run dev -- --port 5173 & \
+	wait
 
 ui:
 	$(PYTHON) -m streamlit run app.py

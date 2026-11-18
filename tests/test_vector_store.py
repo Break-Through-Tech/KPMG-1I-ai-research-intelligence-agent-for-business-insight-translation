@@ -21,7 +21,15 @@ from src.vector_store import (
     store_paper_record,
 )
 
-PAPER = Paper(paper_id="2610.13767v1", title="DualQuant", abstract="We introduce DualQuant.")
+PAPER = Paper(
+    paper_id="2610.13767v1",
+    title="DualQuant",
+    abstract="We introduce DualQuant.",
+    authors=["A. Author", "B. Author"],
+    publish_date="2026-10-15",
+    categories=["cs.LG", "cs.CL"],
+)
+METADATA = {"authors": ["A. Author", "B. Author"], "publish_date": "2026-10-15", "categories": ["cs.LG", "cs.CL"]}
 OTHER = Paper(paper_id="2608.20316v1", title="Pandora's Router", abstract="We route models.")
 
 
@@ -86,10 +94,23 @@ class TestPaperRecord:
         store_paper_record(client, PAPER)
 
         [point] = client.retrieve(HIGH_LEVEL_COLLECTION, [point_id("2610.13767v1")], with_vectors=True)
-        assert point.payload == {"arxiv_id": "2610.13767v1", "title": "DualQuant", "content": "We introduce DualQuant."}
+        assert point.payload == {
+            "arxiv_id": "2610.13767v1",
+            "title": "DualQuant",
+            **METADATA,
+            "content": "We introduce DualQuant.",
+        }
         assert len(point.vector[DENSE_VECTOR]) == 768
         assert encoded["dense"] == ["DualQuant\n\nWe introduce DualQuant."]
         assert point_id("2610.13767v1") == str(uuid.uuid5(uuid.NAMESPACE_DNS, "2610.13767v1"))
+
+    def test_missing_metadata_is_stored_empty(self, client, encoded):
+        store_paper_record(client, OTHER)
+
+        [point] = client.retrieve(HIGH_LEVEL_COLLECTION, [point_id("2608.20316v1")])
+        assert point.payload["authors"] == []
+        assert point.payload["publish_date"] is None
+        assert point.payload["categories"] == []
 
     def test_storing_again_overwrites(self, client, encoded):
         store_paper_record(client, PAPER)
@@ -104,6 +125,7 @@ class TestChunks:
         assert chunk_payloads(client)[1] == {
             "arxiv_id": "2610.13767v1",
             "title": "DualQuant",
+            **METADATA,
             "content_type": "text",
             "content": "Chunk 1 text.",
             "breadcrumb": ["4 Method", "4.2 Scales"],
