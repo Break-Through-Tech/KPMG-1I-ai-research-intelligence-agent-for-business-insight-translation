@@ -8,3 +8,8 @@ qdrant_data/
 # We no longer store PDFs in git
 data/*.pdf
 frontend/node_modules/
+
+# Local conversation memory (SqliteSaver); each developer keeps their own.
+chat_memory.sqlite
+chat_memory.sqlite-shm
+chat_memory.sqlite-wal

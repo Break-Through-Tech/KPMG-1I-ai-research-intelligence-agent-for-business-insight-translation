@@ -36,8 +36,13 @@ def test_health() -> None:
 
 
 def test_research_returns_the_answer_and_what_the_llm_was_given(monkeypatch) -> None:
-    queries = []
-    fake_agent(monkeypatch, lambda query: queries.append(query) or STATE)
+    calls = []
+
+    def run(query, thread_id=None):
+        calls.append((query, thread_id))
+        return STATE
+
+    fake_agent(monkeypatch, run)
 
     response = client.post(
         "/api/research",
@@ -45,7 +50,7 @@ def test_research_returns_the_answer_and_what_the_llm_was_given(monkeypatch) -> 
     )
 
     assert response.status_code == 200
-    assert queries == ["How does 4-bit quantization work?"]
+    assert calls == [("How does 4-bit quantization work?", "t1")]
     assert response.json() == {
         "answer": STATE["answer"],
         "papers": [{"arxiv_id": "2610.13767v1", "title": "DualQuant", "abstract": "We quantize LLMs to 4 bits.",
@@ -63,7 +68,7 @@ def test_research_rejects_blank_query() -> None:
 
 
 def test_search_failure_is_a_503(monkeypatch) -> None:
-    def fail(_query):
+    def fail(_query, thread_id=None):
         raise RetrievalError("Couldn't reach Qdrant")
 
     fake_agent(monkeypatch, fail)
@@ -75,7 +80,7 @@ def test_search_failure_is_a_503(monkeypatch) -> None:
 
 
 def test_llm_failure_is_a_502(monkeypatch) -> None:
-    def fail(_query):
+    def fail(_query, thread_id=None):
         raise GenerationError("connection refused")
 
     fake_agent(monkeypatch, fail)
@@ -91,7 +96,7 @@ def test_questions_are_answered_one_at_a_time(monkeypatch) -> None:
 
     running, overlaps = [], []
 
-    def slow_agent(query):
+    def slow_agent(query, thread_id=None):
         running.append(query)
         overlaps.append(len(running))
         time.sleep(0.05)

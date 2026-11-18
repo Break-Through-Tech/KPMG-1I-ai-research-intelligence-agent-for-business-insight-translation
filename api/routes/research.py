@@ -1,7 +1,7 @@
 """Research endpoint backed by the LangGraph agent in src/agent.py."""
 
 import threading
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -13,13 +13,13 @@ router = APIRouter()
 _agent_lock = threading.Lock()
 
 
-def run_agent(query: str) -> dict[str, Any]:
+def run_agent(query: str, thread_id: Optional[str] = None) -> dict[str, Any]:
     """Lazy import so API health/tests do not load the agent's models at import time."""
 
     from src.agent import run_agent as backend_run_agent
 
     with _agent_lock:
-        return backend_run_agent(query)
+        return backend_run_agent(query, thread_id=thread_id)
 
 
 def hits_in_context(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -34,13 +34,12 @@ def _arxiv_url(arxiv_id: str) -> str:
 
 @router.post("/api/research", response_model=ResearchResponse, response_model_exclude_none=True)
 def research(request: ResearchRequest) -> ResearchResponse:
-    # thread_id and focus_areas are accepted for frontend compatibility but not used: the agent answers each
-    # question on its own, with no conversation memory.
+    # thread_id keeps conversation history across questions; focus_areas are accepted but unused.
     from src.agent import GenerationError
     from src.retrieval import RetrievalError
 
     try:
-        state = run_agent(request.query)
+        state = run_agent(request.query, thread_id=request.thread_id)
     except RetrievalError as error:
         raise HTTPException(status_code=503, detail="The paper search failed. Is the vector store loaded?") from error
     except GenerationError as error:

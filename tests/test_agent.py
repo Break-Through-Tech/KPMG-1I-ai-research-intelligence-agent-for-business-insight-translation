@@ -1,14 +1,17 @@
 """Agent tests. Qdrant and the LLM are faked, and tokens are counted as words."""
 
+import sqlite3
 import threading
 from dataclasses import asdict
 
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from src import agent
 from src.agent import (
+    MAX_HISTORY_TURNS,
     NO_EVIDENCE_ANSWER,
     NOT_AI_ANSWER,
     GenerationError,
@@ -340,6 +343,15 @@ class FakeClient:
         self.closed = True
 
 
+@pytest.fixture
+def temp_checkpointer(tmp_path, monkeypatch):
+    connection = sqlite3.connect(tmp_path / "chat.sqlite", check_same_thread=False)
+    saver = SqliteSaver(connection)
+    saver.setup()
+    monkeypatch.setattr(agent, "get_checkpointer", lambda: saver)
+    return saver
+
+
 class TestRunAgent:
     @pytest.mark.parametrize("query", ["", "   "])
     def test_blank_query_is_rejected_before_opening_qdrant(self, monkeypatch, query):
@@ -347,15 +359,16 @@ class TestRunAgent:
         with pytest.raises(ValueError, match="blank"):
             run_agent(query)
 
-    def test_runs_the_stripped_query_and_closes_the_client(self, searches, monkeypatch):
+    def test_runs_the_stripped_query_and_closes_the_client(self, searches, monkeypatch, temp_checkpointer):
         client = FakeClient()
         monkeypatch.setattr(agent, "get_client", lambda: client)
         monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
         state = run_agent(f"  {QUESTION}  ")
         assert searches[0].calls == [(client, QUESTION)]
         assert state["answer"] and client.closed
+        assert state["thread_id"]
 
-    def test_client_is_closed_when_retrieval_fails(self, searches, monkeypatch):
+    def test_client_is_closed_when_retrieval_fails(self, searches, monkeypatch, temp_checkpointer):
         client = FakeClient()
         monkeypatch.setattr(agent, "get_client", lambda: client)
         monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
@@ -363,3 +376,62 @@ class TestRunAgent:
         with pytest.raises(RetrievalError):
             run_agent(QUESTION)
         assert client.closed
+
+
+class TestConversationMemory:
+    def test_same_thread_keeps_history_across_questions(self, searches, monkeypatch, temp_checkpointer):
+        monkeypatch.setattr(agent, "get_client", FakeClient)
+        monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
+
+        first = run_agent(QUESTION, thread_id="thread-a")
+        assert len(first["history"]) == 1
+        assert first["history"][0]["query"] == QUESTION
+        assert first["history"][0]["paper_hits"][0]["arxiv_id"] == "2610.13767v1"
+        assert first["history"][0]["chunk_hits"][0]["arxiv_id"] == "2610.29544v1"
+
+        second = run_agent("What are the limitations?", thread_id="thread-a")
+        assert second["thread_id"] == "thread-a"
+        assert len(second["history"]) == 2
+        assert second["history"][0]["query"] == QUESTION
+        assert second["history"][1]["query"] == "What are the limitations?"
+
+    def test_different_threads_do_not_share_history(self, searches, monkeypatch, temp_checkpointer):
+        monkeypatch.setattr(agent, "get_client", FakeClient)
+        monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
+
+        run_agent(QUESTION, thread_id="thread-a")
+        other = run_agent("A different question about quantization?", thread_id="thread-b")
+        assert len(other["history"]) == 1
+        assert other["history"][0]["query"] == "A different question about quantization?"
+
+    def test_rejected_question_is_remembered_without_evidence(self, searches, monkeypatch, temp_checkpointer):
+        monkeypatch.setattr(agent, "get_client", FakeClient)
+        monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
+        monkeypatch.setattr(
+            agent,
+            "check_question",
+            lambda question: QuestionCheck(is_about_ai=False, is_valid=False, suggested_query=""),
+        )
+
+        state = run_agent("What is the best pizza place?", thread_id="thread-a")
+        assert state["answer"] == NOT_AI_ANSWER
+        assert len(state["history"]) == 1
+        assert state["history"][0]["paper_hits"] == []
+        assert state["history"][0]["chunk_hits"] == []
+        assert searches[0].calls == [] and searches[1].calls == []
+
+    def test_history_keeps_only_the_last_n_turns(self, searches, monkeypatch, temp_checkpointer):
+        monkeypatch.setattr(agent, "get_client", FakeClient)
+        monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
+
+        for i in range(MAX_HISTORY_TURNS + 2):
+            state = run_agent(f"Question number {i} about LLMs?", thread_id="thread-a")
+
+        assert len(state["history"]) == MAX_HISTORY_TURNS
+        assert state["history"][0]["query"] == "Question number 2 about LLMs?"
+        assert state["history"][-1]["query"] == f"Question number {MAX_HISTORY_TURNS + 1} about LLMs?"
+
+    def test_graph_records_a_turn_even_without_a_checkpointer(self, searches):
+        state = run_graph()
+        assert len(state["history"]) == 1
+        assert state["history"][0]["answer"].startswith("DualQuant reaches 4 bits")

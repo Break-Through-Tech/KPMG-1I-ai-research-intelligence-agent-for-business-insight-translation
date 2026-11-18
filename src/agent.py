@@ -1,18 +1,26 @@
 """Research agent: answer a question from the papers and passages the two searches return.
 
 START -> validate_question -> (if valid) retrieve_papers and retrieve_chunks (in parallel)
-      -> assemble_context -> generate_answer -> END
-Invalid questions end after validate_question with the rejection or "Did you mean" message as the answer.
+      -> assemble_context -> generate_answer -> remember_turn -> END
+Invalid questions go validate_question -> remember_turn -> END with the rejection message.
+
+Conversation memory: the same thread_id reuses a short history (last MAX_HISTORY_TURNS
+turns) stored by LangGraph's SqliteSaver in chat_memory.sqlite. Each turn keeps the
+question, answer, and the papers/passages the LLM was given. Follow-up routing is not
+wired yet; this only saves and reloads that history.
 """
 
+import sqlite3
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict
 from functools import cache, partial
-from typing import Any, TypedDict
+from typing import Any, Optional, TypedDict
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
@@ -30,6 +38,8 @@ LLM_TOKENIZER = "Qwen/Qwen2.5-7B-Instruct"
 LLM_CONTEXT_TOKENS = 32768
 # The local LLM reads about 200 tokens a second, so every 1,000 tokens of context adds about 5 s per answer.
 CONTEXT_TOKENS = 6000
+MAX_HISTORY_TURNS = 3
+CHAT_DB = "chat_memory.sqlite"
 NO_EVIDENCE_ANSWER = "No relevant papers or passages were found for this question."
 NOT_AI_ANSWER = (
     "I can only answer questions about AI research. Try asking about a specific AI topic."
@@ -80,6 +90,9 @@ class AgentState(TypedDict):
     chunk_hits: list[dict[str, Any]]  # ChunkHit fields
     context: str
     answer: str
+    # Carried across run_agent calls with the same thread_id by the checkpointer.
+    # Omitted from each invoke input so prior turns are not wiped.
+    history: list[dict[str, Any]]
 
 
 def _join(*parts: str | None) -> str:
@@ -196,12 +209,39 @@ def validate_question(state: AgentState) -> dict:
 def route_after_validation(state: AgentState):
     if state["is_valid"]:
         return "begin_search"
-    return END
+    return "remember_turn"
 
 
 def begin_search(state: AgentState) -> dict:
     """Gate so both searches start only after the question is validated."""
     return {}
+
+
+def make_turn(state: AgentState) -> dict[str, Any]:
+    """What one question-and-answer keeps for later turns on this thread."""
+    if state["is_valid"] and state.get("context"):
+        papers, chunks = hits_in_context(state)
+    else:
+        # Rejected or no evidence: nothing for a later "paper 2" to point at.
+        papers, chunks = [], []
+    return {
+        "query": state["query"],
+        "answer": state.get("answer", ""),
+        "is_valid": state["is_valid"],
+        "paper_hits": papers,
+        "chunk_hits": chunks,
+    }
+
+
+def add_turn(
+    history: list[dict[str, Any]], turn: dict[str, Any], max_turns: int = MAX_HISTORY_TURNS
+) -> list[dict[str, Any]]:
+    return (list(history) + [turn])[-max_turns:]
+
+
+def remember_turn(state: AgentState) -> dict:
+    """Append this turn to the thread history the checkpointer will save."""
+    return {"history": add_turn(state.get("history", []), make_turn(state))}
 
 
 def retrieve_papers(state: AgentState, client: QdrantClient) -> dict:
@@ -236,7 +276,21 @@ def get_validator_llm() -> ChatOllama:
     return ChatOllama(model=VALIDATION_MODEL, temperature=0)
 
 
-def _initial_state(query: str) -> AgentState:
+_checkpointer: SqliteSaver | None = None
+
+
+def get_checkpointer() -> SqliteSaver:
+    """One SqliteSaver for the process; the DB file is local and gitignored."""
+    global _checkpointer
+    if _checkpointer is None:
+        connection = sqlite3.connect(CHAT_DB, check_same_thread=False)
+        _checkpointer = SqliteSaver(connection)
+        _checkpointer.setup()
+    return _checkpointer
+
+
+def _initial_state(query: str) -> dict[str, Any]:
+    """Per-question fields only. history is left out so the checkpointer keeps prior turns."""
     return {
         "query": query,
         "is_valid": True,
@@ -248,7 +302,7 @@ def _initial_state(query: str) -> AgentState:
     }
 
 
-def build_graph(client: QdrantClient, llm: Runnable):
+def build_graph(client: QdrantClient, llm: Runnable, checkpointer: SqliteSaver | None = None):
     """Both searches share one client: local Qdrant allows only one client per storage folder."""
     graph = StateGraph(AgentState)
     graph.add_node("validate_question", validate_question)
@@ -257,26 +311,38 @@ def build_graph(client: QdrantClient, llm: Runnable):
     graph.add_node("retrieve_chunks", partial(retrieve_chunks, client=client))
     graph.add_node("assemble_context", assemble_context)
     graph.add_node("generate_answer", partial(generate_answer, llm=llm))
+    graph.add_node("remember_turn", remember_turn)
     graph.add_edge(START, "validate_question")
     graph.add_conditional_edges("validate_question", route_after_validation)
     graph.add_edge("begin_search", "retrieve_papers")
     graph.add_edge("begin_search", "retrieve_chunks")
     graph.add_edge(["retrieve_papers", "retrieve_chunks"], "assemble_context")
     graph.add_edge("assemble_context", "generate_answer")
-    graph.add_edge("generate_answer", END)
-    return graph.compile()
+    graph.add_edge("generate_answer", "remember_turn")
+    graph.add_edge("remember_turn", END)
+    return graph.compile(checkpointer=checkpointer)
 
 
-def run_agent(query: str) -> AgentState:
-    """Raises ValueError for a blank query, RetrievalError if Qdrant fails, GenerationError if the LLM fails."""
+def run_agent(query: str, thread_id: Optional[str] = None) -> AgentState:
+    """Answer one question. Pass the same thread_id to keep history across questions.
+
+    Raises ValueError for a blank query, RetrievalError if Qdrant fails, GenerationError if the LLM fails.
+    """
     query = query.strip()
     if not query:
         raise ValueError("The question is blank")
+    if thread_id is None:
+        thread_id = str(uuid.uuid4())
     client = get_client()
     try:
-        return build_graph(client, get_llm()).invoke(_initial_state(query))
+        result = build_graph(client, get_llm(), get_checkpointer()).invoke(
+            _initial_state(query),
+            {"configurable": {"thread_id": thread_id}},
+        )
     finally:
         client.close()
+    result["thread_id"] = thread_id
+    return result
 
 
 def hits_in_context(state: AgentState) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -302,13 +368,15 @@ if __name__ == "__main__":
     import sys
 
     client = get_client()
+    thread_id = str(uuid.uuid4())
     try:
-        agent = build_graph(client, get_llm())
+        agent = build_graph(client, get_llm(), get_checkpointer())
+        config = {"configurable": {"thread_id": thread_id}}
         if len(sys.argv) > 1:
-            _print_result(agent.invoke(_initial_state(sys.argv[1])))
+            _print_result(agent.invoke(_initial_state(sys.argv[1]), config))
         else:
             while question := input("\nResearch question (blank to quit): ").strip():
-                _print_result(agent.invoke(_initial_state(question)))
+                _print_result(agent.invoke(_initial_state(question), config))
     except (KeyboardInterrupt, EOFError):
         pass
     finally:
