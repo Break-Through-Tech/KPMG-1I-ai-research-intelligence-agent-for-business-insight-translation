@@ -64,10 +64,10 @@ Open **http://localhost:5173** and ask a question. An answer takes about a minut
 port 8000 and the frontend on port 5173; Ctrl+C stops both.
 
 What works: asking a question (the search box, suggested questions or the KPMG Focus buttons), the executive
-insight with citation links, the Copy button, and the evidence cards with each passage's paper, section, authors
-and date. Asking again in the same browser tab reuses the same conversation thread on the backend (follow-ups
-about shown papers can skip a new search). Latest AI, Trends, View paper, the research summary numbers and the
-other prototype panels are still placeholders.
+insight with citation links, the Copy button, the evidence cards with each passage's paper, section, authors
+and date, and View paper (opens the arXiv page in a new tab). Asking again in the same browser tab reuses the
+same conversation thread on the backend (follow-ups about shown papers can skip a new search). Latest AI,
+Trends, the research summary numbers and the other prototype panels are still placeholders.
 
 To run the two servers in separate terminals instead:
 

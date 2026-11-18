@@ -201,7 +201,11 @@ const papers = [
   },
 ];
 
-type Paper = Omit<(typeof papers)[number], "relevance"> & { relevance?: number; rank?: number };
+type Paper = Omit<(typeof papers)[number], "relevance"> & {
+  relevance?: number;
+  rank?: number;
+  arxivId?: string;
+};
 
 function formatAuthors(authors?: string[]): string {
   if (!authors?.length) return "Authors unavailable";
@@ -233,6 +237,7 @@ function papersFromResearch(data: ResearchResponse | null): Paper[] {
       source: chunk.paper_id || "Research source",
       category: chunk.section_title || "Research source",
       rank: index + 1,
+      arxivId: chunk.paper_id,
       abstract: chunk.chunk_text || "",
       quote: citation?.supporting_quote || chunk.chunk_text || "",
     };
@@ -787,7 +792,14 @@ function PaperCard({
             <Icon name="bookmark" size={15} />
             {saved ? "Saved" : "Save"}
           </button>
-          <button className="secondary-button" onClick={openPaper}>
+          <button
+            className="secondary-button"
+            onClick={
+              paper.arxivId
+                ? () => window.open(`https://arxiv.org/abs/${paper.arxivId}`, "_blank", "noopener,noreferrer")
+                : openPaper
+            }
+          >
             {compact ? "Preview" : "View paper"}
             <Icon name="external" size={14} />
           </button>
