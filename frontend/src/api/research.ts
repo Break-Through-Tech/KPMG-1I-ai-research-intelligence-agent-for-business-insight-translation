@@ -15,7 +15,19 @@ export type Citation = {
   supporting_quote?: string;
 };
 
+export type ResearchPaper = {
+  arxiv_id: string;
+  title: string;
+  abstract: string;
+  url: string;
+  rank: number;
+  authors?: string[];
+  publish_date?: string | null;
+  categories?: string[];
+};
+
 export type ResearchResponse = {
+  papers?: ResearchPaper[];
   answer?: string;
   confidence?: string;
   top_score?: number;

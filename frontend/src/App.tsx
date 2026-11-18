@@ -224,24 +224,29 @@ function formatDate(isoDate?: string | null): string {
 }
 
 function papersFromResearch(data: ResearchResponse | null): Paper[] {
-  const chunks = data?.retrieved_chunks;
-  if (!chunks?.length) return papers;
-
-  // The API returns the passages in search order, and the ones given to the LLM are always the top-ranked ones.
-  return chunks.map((chunk, index) => {
-    const citation = data?.citations?.find((item) => item.paper_id === chunk.paper_id);
-    return {
-      title: chunk.title || "Research source",
-      authors: formatAuthors(chunk.authors),
-      date: formatDate(chunk.publish_date),
-      source: chunk.paper_id || "Research source",
-      category: chunk.section_title || "Research source",
-      rank: index + 1,
-      arxivId: chunk.paper_id,
-      abstract: chunk.chunk_text || "",
-      quote: citation?.supporting_quote || chunk.chunk_text || "",
-    };
-  });
+  // Before any search, show the sample papers. After a search, only show papers the AI was given.
+  if (!data) return papers;
+  const result: Paper[] = [];
+  for (const paper of data.papers ?? []) {
+    // The best-matching passage from this paper, if there is one.
+    let bestChunk = undefined;
+    for (const chunk of data.retrieved_chunks ?? []) {
+      if (chunk.paper_id !== paper.arxiv_id) continue;
+      if (!bestChunk || (chunk.score ?? 0) > (bestChunk.score ?? 0)) bestChunk = chunk;
+    }
+    result.push({
+      title: paper.title,
+      authors: formatAuthors(paper.authors),
+      date: formatDate(paper.publish_date),
+      source: paper.arxiv_id,
+      category: paper.categories?.[0] || "Research paper",
+      rank: paper.rank,
+      arxivId: paper.arxiv_id,
+      abstract: paper.abstract,
+      quote: bestChunk?.chunk_text || paper.abstract,
+    });
+  }
+  return result;
 }
 
 const nav = [
@@ -821,8 +826,12 @@ function Results({
   openPaper: () => void;
 }) {
   const resultPapers = papersFromResearch(data);
-  const selectedSourceCount = data?.retrieved_chunks?.length ?? papers.length;
-  const topRelevance = data?.top_score != null ? Math.round(data.top_score * 100) : 92;
+  const selectedSourceCount = data ? (data.papers?.length ?? 0) : papers.length;
+  let topScore = 0;
+  for (const chunk of data?.retrieved_chunks ?? []) {
+    if ((chunk.score ?? 0) > topScore) topScore = chunk.score ?? 0;
+  }
+  const topRelevance = Math.round(topScore * 100);
   const answerRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
