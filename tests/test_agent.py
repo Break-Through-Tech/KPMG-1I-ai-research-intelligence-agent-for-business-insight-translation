@@ -8,7 +8,17 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
 from src import agent
-from src.agent import NO_EVIDENCE_ANSWER, GenerationError, build_graph, fit_to_budget, format_context, run_agent
+from src.agent import (
+    NO_EVIDENCE_ANSWER,
+    NOT_AI_ANSWER,
+    GenerationError,
+    QuestionCheck,
+    _initial_state,
+    build_graph,
+    fit_to_budget,
+    format_context,
+    run_agent,
+)
 from src.prompts import answer_prompt
 from src.retrieval import ChunkHit, PaperHit, RetrievalError
 
@@ -23,6 +33,16 @@ def count_words(text):
 def word_tokens(monkeypatch):
     """The real tokenizer is downloaded from Hugging Face; word counts keep the tests offline."""
     monkeypatch.setattr(agent, "count_tokens", count_words)
+
+
+@pytest.fixture(autouse=True)
+def accept_questions(monkeypatch):
+    """Existing graph tests assume search runs; validation is covered separately."""
+    monkeypatch.setattr(
+        agent,
+        "check_question",
+        lambda question: QuestionCheck(is_about_ai=True, is_valid=True, suggested_query=""),
+    )
 
 
 def paper(rank=1, arxiv_id="2610.13767v1", title="DualQuant", abstract="We quantize LLMs to 4 bits.") -> dict:
@@ -178,8 +198,56 @@ def searches(monkeypatch):
     return papers, chunks
 
 
-def run_graph(llm=None):
-    return build_graph(CLIENT, (llm or FakeLLM()).runnable).invoke({"query": QUESTION})
+def run_graph(llm=None, query=QUESTION):
+    return build_graph(CLIENT, (llm or FakeLLM()).runnable).invoke(_initial_state(query))
+
+
+class TestValidateQuestion:
+    def test_valid_question_continues_to_search(self, searches, monkeypatch):
+        monkeypatch.setattr(
+            agent,
+            "check_question",
+            lambda question: QuestionCheck(is_about_ai=True, is_valid=True, suggested_query=""),
+        )
+        state = run_graph()
+        assert state["is_valid"] is True
+        assert state["answer"].startswith("DualQuant reaches 4 bits")
+        assert searches[0].calls and searches[1].calls
+
+    def test_unclear_ai_question_suggests_and_skips_search(self, searches, monkeypatch):
+        monkeypatch.setattr(
+            agent,
+            "check_question",
+            lambda question: QuestionCheck(
+                is_about_ai=True,
+                is_valid=False,
+                suggested_query="What causes hallucination in large language models?",
+            ),
+        )
+        state = run_graph(query="yo why does ai make stuff up")
+        assert state["is_valid"] is False
+        assert state["suggested_query"] == "What causes hallucination in large language models?"
+        assert 'Did you mean: "What causes hallucination in large language models?"' in state["answer"]
+        assert searches[0].calls == [] and searches[1].calls == []
+        assert state["paper_hits"] == [] and state["chunk_hits"] == []
+
+    def test_not_about_ai_rejects_without_search(self, searches, monkeypatch):
+        monkeypatch.setattr(
+            agent,
+            "check_question",
+            lambda question: QuestionCheck(is_about_ai=False, is_valid=False, suggested_query=""),
+        )
+        state = run_graph(query="What is the best pizza place?")
+        assert state["is_valid"] is False
+        assert state["answer"] == NOT_AI_ANSWER
+        assert searches[0].calls == [] and searches[1].calls == []
+
+    def test_checker_failure_lets_the_question_through(self, searches, monkeypatch):
+        monkeypatch.setattr(agent, "check_question", lambda question: None)
+        state = run_graph()
+        assert state["is_valid"] is True
+        assert state["answer"].startswith("DualQuant reaches 4 bits")
+        assert searches[0].calls and searches[1].calls
 
 
 class TestGraph:
