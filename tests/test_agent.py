@@ -11,7 +11,6 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from src import agent
 from src.agent import (
-    MAX_HISTORY_TURNS,
     NO_EVIDENCE_ANSWER,
     NOT_AI_ANSWER,
     GenerationError,
@@ -22,6 +21,7 @@ from src.agent import (
     format_context,
     run_agent,
 )
+from src.followup import MAX_HISTORY_TURNS, NEW_SEARCH, SAME_PAPERS, FollowUpPlan
 from src.prompts import answer_prompt
 from src.retrieval import ChunkHit, PaperHit, RetrievalError
 
@@ -45,6 +45,16 @@ def accept_questions(monkeypatch):
         agent,
         "check_question",
         lambda question: QuestionCheck(is_about_ai=True, is_valid=True, suggested_query=""),
+    )
+
+
+@pytest.fixture(autouse=True)
+def pass_through_followups(monkeypatch):
+    """Default: treat every message as a fresh search with no rewrite. Routing tests override this."""
+    monkeypatch.setattr(
+        agent,
+        "plan_follow_up",
+        lambda question, history, decide=None: FollowUpPlan(NEW_SEARCH, question, reason="test"),
     )
 
 
@@ -170,13 +180,13 @@ class FakeSearch:
     def __init__(self, hits=(), error=None, barrier=None):
         self.hits, self.error, self.barrier, self.calls = list(hits), error, barrier, []
 
-    def __call__(self, client, question):
-        self.calls.append((client, question))
+    def __call__(self, client, question, top_k=None):
+        self.calls.append((client, question, top_k))
         if self.barrier:
             self.barrier.wait()
         if self.error:
             raise self.error
-        return self.hits
+        return self.hits[:top_k] if top_k is not None else self.hits
 
 
 class FakeLLM:
@@ -265,8 +275,8 @@ class TestGraph:
     def test_both_searches_get_the_original_query_and_the_shared_client(self, searches):
         run_graph()
         papers, chunks = searches
-        assert papers.calls == [(CLIENT, QUESTION)]
-        assert chunks.calls == [(CLIENT, QUESTION)]
+        assert papers.calls == [(CLIENT, QUESTION, 10)]
+        assert chunks.calls == [(CLIENT, QUESTION, 20)]
 
     def test_searches_run_in_parallel(self, monkeypatch):
         # Each search waits until the other has started; run one after the other, they'd time out.
@@ -364,7 +374,7 @@ class TestRunAgent:
         monkeypatch.setattr(agent, "get_client", lambda: client)
         monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
         state = run_agent(f"  {QUESTION}  ")
-        assert searches[0].calls == [(client, QUESTION)]
+        assert searches[0].calls == [(client, QUESTION, 10)]
         assert state["answer"] and client.closed
         assert state["thread_id"]
 
@@ -435,3 +445,77 @@ class TestConversationMemory:
         state = run_graph()
         assert len(state["history"]) == 1
         assert state["history"][0]["answer"].startswith("DualQuant reaches 4 bits")
+        assert state["follow_up_suggestions"]
+
+
+class TestFollowUpRouting:
+    def test_same_papers_reuses_saved_evidence_without_search(self, searches, monkeypatch, temp_checkpointer):
+        monkeypatch.setattr(agent, "get_client", FakeClient)
+        monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
+
+        first = run_agent(QUESTION, thread_id="follow-a")
+        saved_papers = first["history"][0]["paper_hits"]
+        saved_chunks = first["history"][0]["chunk_hits"]
+        searches[0].calls.clear()
+        searches[1].calls.clear()
+
+        monkeypatch.setattr(
+            agent,
+            "plan_follow_up",
+            lambda question, history, decide=None: FollowUpPlan(
+                SAME_PAPERS,
+                "What are the limitations of DualQuant?",
+                focus_paper_ids=["2610.13767v1"],
+                reason="test",
+            ),
+        )
+        second = run_agent("What are the limitations of paper 1?", thread_id="follow-a")
+
+        assert second["route"] == SAME_PAPERS
+        assert second["query"] == "What are the limitations of DualQuant?"
+        assert searches[0].calls == [] and searches[1].calls == []
+        assert second["paper_hits"] == [p for p in saved_papers if p["arxiv_id"] == "2610.13767v1"]
+        assert second["chunk_hits"] == [c for c in saved_chunks if c["arxiv_id"] == "2610.13767v1"]
+        assert second["answer"].startswith("DualQuant reaches 4 bits")
+
+    def test_new_search_excludes_already_shown_papers(self, searches, monkeypatch, temp_checkpointer):
+        monkeypatch.setattr(agent, "get_client", FakeClient)
+        monkeypatch.setattr(agent, "get_llm", lambda: FakeLLM().runnable)
+        run_agent(QUESTION, thread_id="follow-b")
+        searches[0].calls.clear()
+        searches[1].calls.clear()
+
+        other_paper = PaperHit(
+            arxiv_id="2610.99999v1", title="Other", abstract="Other abstract.", score=0.7, rank=1
+        )
+        other_chunk = ChunkHit(
+            chunk_id="2610.99999v1_chunk_1",
+            arxiv_id="2610.99999v1",
+            title="Other",
+            content="Other content.",
+            breadcrumb=["1 Intro"],
+            chunk_index=1,
+            content_type="text",
+            score=0.02,
+            rank=1,
+        )
+        # First hit is a previously shown paper; it should be dropped.
+        searches[0].hits = [PAPER_HIT, other_paper]
+        searches[1].hits = [CHUNK_HIT, other_chunk]
+
+        monkeypatch.setattr(
+            agent,
+            "plan_follow_up",
+            lambda question, history, decide=None: FollowUpPlan(
+                NEW_SEARCH,
+                "What other approaches reduce inference cost?",
+                exclude_paper_ids=["2610.13767v1", "2610.29544v1"],
+                reason="test",
+            ),
+        )
+        state = run_agent("Are there other papers on this topic?", thread_id="follow-b")
+
+        assert state["route"] == NEW_SEARCH
+        assert [p["arxiv_id"] for p in state["paper_hits"]] == ["2610.99999v1"]
+        assert [c["arxiv_id"] for c in state["chunk_hits"]] == ["2610.99999v1"]
+        assert state["paper_hits"][0]["rank"] == 1

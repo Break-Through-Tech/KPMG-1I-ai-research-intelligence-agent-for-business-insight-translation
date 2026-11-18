@@ -17,10 +17,11 @@ Install the project dependencies:
 pip install -r requirements.txt
 ```
 
-Install [Ollama](https://ollama.com) and pull the model the agent uses:
+Install [Ollama](https://ollama.com) and pull the models the agent uses:
 
 ```bash
 ollama pull qwen2.5:7b
+ollama pull qwen2.5:1.5b   # question validation before search
 ```
 
 ## 2. Load papers into the vector store
@@ -145,26 +146,41 @@ chunk among its top 100). Result counts, the candidate pool and the RRF constant
 
 ## 6. Ask the agent
 
-The agent (`src/agent.py`) is a LangGraph graph that answers a question from what the two searches above return:
+The agent (`src/agent.py`) is a LangGraph graph that answers from the two searches above:
 
-1. `retrieve_papers` (top 10 papers) and `retrieve_chunks` (top 20 chunks) run in parallel on the same question.
-2. `assemble_context` waits for both and writes the results as two labelled sections: papers (rank, arXiv ID,
-   title, abstract) and passages (rank, arXiv ID, title, section, content type, text). Scores are left out.
-   It keeps only the highest-ranked whole papers and passages that fit in 6,000 tokens (`CONTEXT_TOKENS`,
-   counted with Qwen2.5's tokenizer, downloaded from Hugging Face on first use). Papers get the share of the
-   budget they take up in the full results and passages fill the rest, usually 3–4 papers and 9 passages.
-   Reading the prompt takes about 5 s per 1,000 tokens on a laptop, so this roughly halves the answer time
-   compared with all 10 papers and 20 passages.
-3. `generate_answer` sends the question and context to `qwen2.5:7b` through Ollama, with the instructions in
-   `src/prompts.py`: answer only from the context, keep evidence apart from interpretation, say when the context
-   isn't enough, and cite papers as `[Paper Title](https://arxiv.org/abs/<arxiv_id>)`. If both searches found
-   nothing, the LLM isn't called and the answer says so.
+1. `contextualize_query` decides whether this is a follow-up about papers already shown (`same_papers`) or needs a
+   new search (`new_search`), and rewrites short follow-ups into a standalone question (`src/followup.py`).
+2. On `new_search`, `validate_question` uses `qwen2.5:1.5b` to reject off-topic or unclear questions (with a
+   "Did you mean" suggestion). Same-paper follow-ups skip validation.
+3. `retrieve_papers` (top 10) and `retrieve_chunks` (top 20) run in parallel, or `reuse_evidence` reloads the
+   papers/passages saved from an earlier turn. Already-shown papers can be excluded when the user asks for others.
+4. `assemble_context` keeps the highest-ranked whole papers and passages that fit in 6,000 tokens
+   (`CONTEXT_TOKENS`, Qwen2.5 tokenizer). Scores are left out of the prompt.
+5. `generate_answer` uses `qwen2.5:7b` with `src/prompts.py`. Cite papers as
+   `[Paper Title](https://arxiv.org/abs/<arxiv_id>)`.
+6. `remember_turn` saves the last 3 turns per `thread_id` in local `chat_memory.sqlite` and suggests follow-ups.
 
-Ollama must be running (the desktop app, or `ollama serve`) with `qwen2.5:7b` pulled (section 1).
+Ollama must be running with `qwen2.5:7b` and `qwen2.5:1.5b` pulled (section 1).
 
 ```bash
 make agent Q="How does quantization affect the inference speed and accuracy of large language models?"
-make agent    # no Q: type one question after another; blank line to quit
+make agent    # no Q: type questions after another; 1-3 picks a suggestion; /new starts a new thread
+```
+
+### Follow-up questions
+
+With the same `thread_id`, the agent remembers the last 3 turns (question, answer, papers/passages given to the LLM):
+
+- **About papers already shown** ("What are the limitations of paper 2?", "Explain that more simply"): reuses that
+  evidence — no new search.
+- **Needs different papers** ("What about in healthcare?", "Are there other papers?"): searches again. Asking for
+  *other* papers excludes ones already shown.
+
+From code:
+
+```python
+first = run_agent("How can hallucination in LLMs be reduced?", thread_id="demo")
+second = run_agent("What are the limitations of paper 2?", thread_id="demo")
 ```
 
 It prints the answer, the papers and passages the LLM was given, and the context size. An answer takes about a

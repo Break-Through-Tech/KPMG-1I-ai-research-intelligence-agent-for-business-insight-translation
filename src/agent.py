@@ -1,19 +1,21 @@
 """Research agent: answer a question from the papers and passages the two searches return.
 
-START -> validate_question -> (if valid) retrieve_papers and retrieve_chunks (in parallel)
-      -> assemble_context -> generate_answer -> remember_turn -> END
-Invalid questions go validate_question -> remember_turn -> END with the rejection message.
+START -> contextualize_query
+  -> same_papers: reuse_evidence -> assemble_context -> generate_answer -> remember_turn -> END
+  -> new_search: validate_question
+       -> (if valid) retrieve_papers and retrieve_chunks (in parallel)
+            -> assemble_context -> generate_answer -> remember_turn -> END
+       -> (if invalid) remember_turn -> END
 
-Conversation memory: the same thread_id reuses a short history (last MAX_HISTORY_TURNS
-turns) stored by LangGraph's SqliteSaver in chat_memory.sqlite. Each turn keeps the
-question, answer, and the papers/passages the LLM was given. Follow-up routing is not
-wired yet; this only saves and reloads that history.
+Conversation memory: the same thread_id reuses a short history stored by LangGraph's
+SqliteSaver in chat_memory.sqlite. Each turn keeps the question, answer, and the
+papers/passages the LLM was given. Follow-ups are planned in src/followup.py.
 """
 
 import sqlite3
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import cache, partial
 from typing import Any, Optional, TypedDict
 
@@ -26,8 +28,18 @@ from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from tokenizers import Tokenizer
 
+from src.followup import (
+    FOLLOW_UP_SYSTEM_PROMPT,
+    NEW_SEARCH,
+    SAME_PAPERS,
+    FollowUpDecision,
+    MAX_HISTORY_TURNS,
+    add_turn,
+    plan_follow_up,
+    suggest_follow_ups,
+)
 from src.prompts import answer_prompt
-from src.retrieval import search_chunks, search_papers
+from src.retrieval import ChunkHit, PaperHit, search_chunks, search_papers
 from src.vector_store import get_client
 
 LLM_MODEL = "qwen2.5:7b"
@@ -38,7 +50,6 @@ LLM_TOKENIZER = "Qwen/Qwen2.5-7B-Instruct"
 LLM_CONTEXT_TOKENS = 32768
 # The local LLM reads about 200 tokens a second, so every 1,000 tokens of context adds about 5 s per answer.
 CONTEXT_TOKENS = 6000
-MAX_HISTORY_TURNS = 3
 CHAT_DB = "chat_memory.sqlite"
 NO_EVIDENCE_ANSWER = "No relevant papers or passages were found for this question."
 NOT_AI_ANSWER = (
@@ -81,15 +92,26 @@ validation_prompt = ChatPromptTemplate.from_messages([
     ("human", "{question}"),
 ])
 
+follow_up_prompt = ChatPromptTemplate.from_messages([
+    ("system", FOLLOW_UP_SYSTEM_PROMPT),
+    ("human", "New message: {question}"),
+])
+
 
 class AgentState(TypedDict):
+    # Standalone question every node works with. For a follow-up this is the rewrite.
     query: str
+    original_query: str
     is_valid: bool
     suggested_query: str
+    route: str
+    focus_paper_ids: list[str]
+    exclude_paper_ids: list[str]
     paper_hits: list[dict[str, Any]]  # PaperHit fields
     chunk_hits: list[dict[str, Any]]  # ChunkHit fields
     context: str
     answer: str
+    follow_up_suggestions: list[str]
     # Carried across run_agent calls with the same thread_id by the checkpointer.
     # Omitted from each invoke input so prior turns are not wiped.
     history: list[dict[str, Any]]
@@ -173,6 +195,41 @@ def check_question(question: str) -> QuestionCheck | None:
         return None
 
 
+def decide_follow_up(inputs: dict) -> FollowUpDecision | None:
+    structured = get_llm().with_structured_output(FollowUpDecision, include_raw=True)
+    return (follow_up_prompt | structured).invoke(inputs)["parsed"]
+
+
+def contextualize_query(state: AgentState) -> dict:
+    """Rewrite a follow-up as a standalone question and pick same_papers vs new_search."""
+    plan = plan_follow_up(state["original_query"], state.get("history", []), decide_follow_up)
+    return {
+        "query": plan.standalone_query,
+        "route": plan.route,
+        "focus_paper_ids": plan.focus_paper_ids,
+        "exclude_paper_ids": plan.exclude_paper_ids,
+    }
+
+
+def route_after_contextualize(state: AgentState):
+    # Questions about papers already shown skip validation (short ones like "explain paper 2").
+    if state["route"] == SAME_PAPERS:
+        return "reuse_evidence"
+    return "validate_question"
+
+
+def reuse_evidence(state: AgentState) -> dict:
+    """Answer from the papers/passages already shown instead of searching again."""
+    last = state["history"][-1]
+    focus = set(state.get("focus_paper_ids") or [])
+    papers = list(last.get("paper_hits") or [])
+    chunks = list(last.get("chunk_hits") or [])
+    if focus:
+        papers = [p for p in papers if p["arxiv_id"] in focus]
+        chunks = [c for c in chunks if c["arxiv_id"] in focus]
+    return {"paper_hits": papers, "chunk_hits": chunks, "is_valid": True}
+
+
 def validate_question(state: AgentState) -> dict:
     """Same behaviour as main: reject off-topic or unclear questions before search.
 
@@ -217,39 +274,31 @@ def begin_search(state: AgentState) -> dict:
     return {}
 
 
-def make_turn(state: AgentState) -> dict[str, Any]:
-    """What one question-and-answer keeps for later turns on this thread."""
-    if state["is_valid"] and state.get("context"):
-        papers, chunks = hits_in_context(state)
-    else:
-        # Rejected or no evidence: nothing for a later "paper 2" to point at.
-        papers, chunks = [], []
-    return {
-        "query": state["query"],
-        "answer": state.get("answer", ""),
-        "is_valid": state["is_valid"],
-        "paper_hits": papers,
-        "chunk_hits": chunks,
-    }
+def _drop_excluded_papers(hits: list[PaperHit], exclude: set[str]) -> list[PaperHit]:
+    if not exclude:
+        return hits
+    kept = [hit for hit in hits if hit.arxiv_id not in exclude]
+    return [replace(hit, rank=i) for i, hit in enumerate(kept, start=1)]
 
 
-def add_turn(
-    history: list[dict[str, Any]], turn: dict[str, Any], max_turns: int = MAX_HISTORY_TURNS
-) -> list[dict[str, Any]]:
-    return (list(history) + [turn])[-max_turns:]
-
-
-def remember_turn(state: AgentState) -> dict:
-    """Append this turn to the thread history the checkpointer will save."""
-    return {"history": add_turn(state.get("history", []), make_turn(state))}
+def _drop_excluded_chunks(hits: list[ChunkHit], exclude: set[str]) -> list[ChunkHit]:
+    if not exclude:
+        return hits
+    kept = [hit for hit in hits if hit.arxiv_id not in exclude]
+    return [replace(hit, rank=i) for i, hit in enumerate(kept, start=1)]
 
 
 def retrieve_papers(state: AgentState, client: QdrantClient) -> dict:
-    return {"paper_hits": [asdict(hit) for hit in search_papers(client, state["query"])]}
+    exclude = set(state.get("exclude_paper_ids") or [])
+    # Ask for extras so there are still results after dropping papers already shown.
+    hits = search_papers(client, state["query"], top_k=10 + len(exclude))
+    return {"paper_hits": [asdict(hit) for hit in _drop_excluded_papers(hits, exclude)[:10]]}
 
 
 def retrieve_chunks(state: AgentState, client: QdrantClient) -> dict:
-    return {"chunk_hits": [asdict(hit) for hit in search_chunks(client, state["query"])]}
+    exclude = set(state.get("exclude_paper_ids") or [])
+    hits = search_chunks(client, state["query"], top_k=20 + len(exclude))
+    return {"chunk_hits": [asdict(hit) for hit in _drop_excluded_chunks(hits, exclude)[:20]]}
 
 
 def assemble_context(state: AgentState) -> dict:
@@ -266,6 +315,47 @@ def generate_answer(state: AgentState, llm: Runnable) -> dict:
     if not message.content.strip():
         raise GenerationError("The LLM returned an empty answer")
     return {"answer": message.content}
+
+
+def _papers_for_followup(paper_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Numbered list follow-up routing uses for 'paper 2' / suggestions."""
+    return [{"paper_id": hit["arxiv_id"], "title": hit["title"]} for hit in paper_hits]
+
+
+def make_turn(state: AgentState) -> dict[str, Any]:
+    """What one question-and-answer keeps for later turns on this thread."""
+    history = state.get("history", [])
+    if state.get("route") == SAME_PAPERS and history:
+        # Keep the previous shown list so "paper 2" numbering does not shift.
+        papers = history[-1].get("papers", [])
+        paper_hits = history[-1].get("paper_hits", [])
+        chunk_hits = history[-1].get("chunk_hits", [])
+    elif state["is_valid"] and state.get("context"):
+        paper_hits, chunk_hits = hits_in_context(state)
+        papers = _papers_for_followup(paper_hits)
+    else:
+        # Rejected or no evidence: nothing for a later "paper 2" to point at.
+        papers, paper_hits, chunk_hits = [], [], []
+    return {
+        "original_query": state.get("original_query") or state["query"],
+        "query": state["query"],
+        "route": state.get("route", NEW_SEARCH),
+        "answer": state.get("answer", ""),
+        "is_valid": state["is_valid"],
+        "papers": papers,
+        "paper_hits": paper_hits,
+        "chunk_hits": chunk_hits,
+        "citations": [],
+    }
+
+
+def remember_turn(state: AgentState) -> dict:
+    """Append this turn to the thread history and offer follow-up suggestions."""
+    new_history = add_turn(state.get("history", []), make_turn(state), max_turns=MAX_HISTORY_TURNS)
+    return {
+        "history": new_history,
+        "follow_up_suggestions": suggest_follow_ups(new_history),
+    }
 
 
 def get_llm() -> ChatOllama:
@@ -293,27 +383,40 @@ def _initial_state(query: str) -> dict[str, Any]:
     """Per-question fields only. history is left out so the checkpointer keeps prior turns."""
     return {
         "query": query,
+        "original_query": query,
         "is_valid": True,
         "suggested_query": "",
+        "route": NEW_SEARCH,
+        "focus_paper_ids": [],
+        "exclude_paper_ids": [],
         "paper_hits": [],
         "chunk_hits": [],
         "context": "",
         "answer": "",
+        "follow_up_suggestions": [],
     }
 
 
 def build_graph(client: QdrantClient, llm: Runnable, checkpointer: SqliteSaver | None = None):
     """Both searches share one client: local Qdrant allows only one client per storage folder."""
     graph = StateGraph(AgentState)
+    graph.add_node("contextualize_query", contextualize_query)
     graph.add_node("validate_question", validate_question)
+    graph.add_node("reuse_evidence", reuse_evidence)
     graph.add_node("begin_search", begin_search)
     graph.add_node("retrieve_papers", partial(retrieve_papers, client=client))
     graph.add_node("retrieve_chunks", partial(retrieve_chunks, client=client))
     graph.add_node("assemble_context", assemble_context)
     graph.add_node("generate_answer", partial(generate_answer, llm=llm))
     graph.add_node("remember_turn", remember_turn)
-    graph.add_edge(START, "validate_question")
+    graph.add_edge(START, "contextualize_query")
+    graph.add_conditional_edges(
+        "contextualize_query",
+        route_after_contextualize,
+        {"reuse_evidence": "reuse_evidence", "validate_question": "validate_question"},
+    )
     graph.add_conditional_edges("validate_question", route_after_validation)
+    graph.add_edge("reuse_evidence", "assemble_context")
     graph.add_edge("begin_search", "retrieve_papers")
     graph.add_edge("begin_search", "retrieve_chunks")
     graph.add_edge(["retrieve_papers", "retrieve_chunks"], "assemble_context")
@@ -324,7 +427,7 @@ def build_graph(client: QdrantClient, llm: Runnable, checkpointer: SqliteSaver |
 
 
 def run_agent(query: str, thread_id: Optional[str] = None) -> AgentState:
-    """Answer one question. Pass the same thread_id to keep history across questions.
+    """Answer one question. Pass the same thread_id to ask follow-ups.
 
     Raises ValueError for a blank query, RetrievalError if Qdrant fails, GenerationError if the LLM fails.
     """
@@ -351,6 +454,10 @@ def hits_in_context(state: AgentState) -> tuple[list[dict[str, Any]], list[dict[
 
 
 def _print_result(state: AgentState):
+    if state["query"] != state["original_query"]:
+        print(f"\n(Understood as: {state['query']})")
+    if state.get("route") == SAME_PAPERS:
+        print("(Answered from papers shown earlier)")
     papers, chunks = hits_in_context(state)
     print(f"\n===== Answer =====\n{state['answer']}")
     print(f"\n===== Papers given to the LLM ({len(papers)} of {len(state['paper_hits'])} retrieved) =====")
@@ -360,6 +467,10 @@ def _print_result(state: AgentState):
     for hit in chunks:
         print(f"{hit['rank']:3}. {hit['chunk_id']}  {' > '.join(hit['breadcrumb'])}")
     print(f"\nContext: {count_tokens(state['context']):,} tokens (budget {CONTEXT_TOKENS:,})")
+    if state.get("follow_up_suggestions"):
+        print("\nYou could ask next:")
+        for number, suggestion in enumerate(state["follow_up_suggestions"], start=1):
+            print(f"  {number}. {suggestion}")
 
 
 if __name__ == "__main__":
@@ -369,14 +480,33 @@ if __name__ == "__main__":
 
     client = get_client()
     thread_id = str(uuid.uuid4())
+    suggestions: list[str] = []
     try:
         agent = build_graph(client, get_llm(), get_checkpointer())
         config = {"configurable": {"thread_id": thread_id}}
         if len(sys.argv) > 1:
             _print_result(agent.invoke(_initial_state(sys.argv[1]), config))
         else:
-            while question := input("\nResearch question (blank to quit): ").strip():
-                _print_result(agent.invoke(_initial_state(question), config))
+            while True:
+                prompt = "\nResearch question (blank to quit"
+                if suggestions:
+                    prompt += ", 1-3 for a suggestion, /new for a new thread"
+                prompt += "): "
+                text = input(prompt).strip()
+                if not text:
+                    break
+                if text == "/new":
+                    thread_id = str(uuid.uuid4())
+                    config = {"configurable": {"thread_id": thread_id}}
+                    suggestions = []
+                    print("(Started a new conversation)")
+                    continue
+                if text.isdigit() and suggestions and 1 <= int(text) <= len(suggestions):
+                    text = suggestions[int(text) - 1]
+                    print(f"(Asking: {text})")
+                state = agent.invoke(_initial_state(text), config)
+                _print_result(state)
+                suggestions = state.get("follow_up_suggestions") or []
     except (KeyboardInterrupt, EOFError):
         pass
     finally:
