@@ -162,9 +162,48 @@ class TestAnswerPrompt:
     def test_question_and_context_reach_the_model(self):
         system, human = answer_prompt.format_messages(question="How does 4-bit quantization work?",
                                                       context="## Papers\n\n[P1] | arXiv:2610.13767v1")
-        assert "[Paper Title](https://arxiv.org/abs/ARXIV_ID)" in system.content
+        assert "Use the passage labels exactly as they appear in the context" in system.content
+        assert "[C1]" in system.content
         assert human.content.endswith("Question: How does 4-bit quantization work?")
         assert "[P1] | arXiv:2610.13767v1" in human.content
+
+class TestExtractCitations:
+    def test_returns_metadata_for_cited_passages(self):
+        chunks = [
+            chunk(1, "2610.11111v1", "Paper One"),
+            chunk(2, "2610.22222v1", "Paper Two"),
+        ]
+
+        citations = agent.extract_citations(
+            "The second paper discusses this method [C2].",
+            chunks,
+        )
+
+        assert citations == [{
+            "paper_id": "2610.22222v1",
+            "title": "Paper Two",
+            "section": "3 Method > 3.2 Selection",
+            "url": "https://arxiv.org/abs/2610.22222v1",
+            "chunk_id": "2610.22222v1_chunk_2",
+            "citation_label": "[C2]",
+        }]
+
+    def test_returns_empty_list_when_answer_has_no_citations(self):
+        citations = agent.extract_citations(
+            "The paper discusses quantization.",
+            [chunk()],
+        )
+
+        assert citations == []
+
+    def test_ignores_citation_labels_not_in_retrieved_passages(self):
+        citations = agent.extract_citations(
+            "This method is effective [C1] [C99].",
+            [chunk()],
+        )
+
+        assert len(citations) == 1
+        assert citations[0]["citation_label"] == "[C1]"
 
 
 PAPER_HIT = PaperHit(arxiv_id="2610.13767v1", title="DualQuant", abstract="We quantize LLMs to 4 bits.", score=0.8, rank=1)
@@ -192,7 +231,7 @@ class FakeSearch:
 class FakeLLM:
     """A runnable LLM that records the prompt it receives."""
 
-    def __init__(self, answer="DualQuant reaches 4 bits [DualQuant](https://arxiv.org/abs/2610.13767v1).", error=None):
+    def __init__(self, answer="DualQuant reaches 4 bits.", error=None):
         self.answer, self.error, self.prompts = answer, error, []
         self.runnable = RunnableLambda(self._reply)
 
@@ -344,6 +383,20 @@ class TestGraph:
     def test_empty_llm_answer_is_an_error(self, searches):
         with pytest.raises(GenerationError, match="empty answer"):
             run_graph(FakeLLM(answer="   "))
+
+    def test_end_to_end_returns_citations(self, searches):
+        llm = FakeLLM(answer="Selective KV reconstruction is used [C1].")
+        state = run_graph(llm)
+        
+        assert "[C1]" in state["answer"]
+        assert state["citations"] == [{
+            "paper_id": "2610.29544v1",
+            "title": "RISK-KV",
+            "section": "3 Method",
+            "url": "https://arxiv.org/abs/2610.29544v1",
+            "chunk_id": "2610.29544v1_chunk_3",
+            "citation_label": "[C1]",
+        }]
 
 
 class FakeClient:

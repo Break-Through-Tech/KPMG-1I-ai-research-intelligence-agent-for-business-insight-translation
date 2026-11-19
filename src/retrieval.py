@@ -18,6 +18,8 @@ from qdrant_client.models import Prefetch, Rrf, RrfQuery, ScoredPoint
 from src.embeddings import embed_query, embed_sparse_query
 from src.vector_store import CHUNK_COLLECTION, DENSE_VECTOR, HIGH_LEVEL_COLLECTION, SPARSE_VECTOR
 
+from typing import Optional
+
 PAPER_TOP_K = 10
 CHUNK_TOP_K = 20
 HYBRID_CANDIDATES = 100  # chunks each of the dense and sparse searches contributes to fusion
@@ -31,12 +33,12 @@ class RetrievalError(RuntimeError):
 @dataclass
 class PaperHit:
     arxiv_id: str
-    title: str | None
-    abstract: str | None
+    title: Optional[str]
+    abstract: Optional[str]
     score: float  # cosine similarity between the question and the paper's title + abstract
     rank: int     # 1-based
     authors: list[str] = field(default_factory=list)
-    publish_date: str | None = None  # ISO date, e.g. "2026-10-15"
+    publish_date: Optional[str] = None  # ISO date, e.g. "2026-10-15"
     categories: list[str] = field(default_factory=list)
 
 
@@ -44,22 +46,22 @@ class PaperHit:
 class ChunkHit:
     chunk_id: str
     arxiv_id: str
-    title: str | None
+    title: Optional[str]
     content: str
     breadcrumb: list[str]
-    chunk_index: int | None  # position within the paper, i.e. document order
-    content_type: str | None
+    chunk_index: Optional[int]  # position within the paper, i.e. document order
+    content_type: Optional[str]
     score: float  # RRF score; only the order matters, not the size
     rank: int     # 1-based position in the fused results
     authors: list[str] = field(default_factory=list)
-    publish_date: str | None = None  # ISO date, e.g. "2026-10-15"
+    publish_date: Optional[str] = None  # ISO date, e.g. "2026-10-15"
     categories: list[str] = field(default_factory=list)
     # Filled only with explain=True. A rank is None if that search didn't have the chunk among
     # its HYBRID_CANDIDATES; dense scores are cosine similarities, sparse scores BM25 scores.
-    dense_rank: int | None = None
-    dense_score: float | None = None
-    sparse_rank: int | None = None
-    sparse_score: float | None = None
+    dense_rank: Optional[int] = None
+    dense_score: Optional[float] = None
+    sparse_rank: Optional[int] = None
+    sparse_score: Optional[float] = None
 
 
 def _check_collection(client: QdrantClient, collection: str):

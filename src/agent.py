@@ -14,10 +14,12 @@ papers/passages the LLM was given. Follow-ups are planned in src/followup.py.
 
 import sqlite3
 import uuid
+import re
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from functools import cache, partial
 from typing import Any, Optional, TypedDict
+from typing import Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
@@ -27,6 +29,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from tokenizers import Tokenizer
+
 
 from src.followup import (
     FOLLOW_UP_SYSTEM_PROMPT,
@@ -115,9 +118,10 @@ class AgentState(TypedDict):
     # Carried across run_agent calls with the same thread_id by the checkpointer.
     # Omitted from each invoke input so prior turns are not wiped.
     history: list[dict[str, Any]]
+    citations: list[dict[str, Any]]
 
 
-def _join(*parts: str | None) -> str:
+def _join(*parts: Optional[str]) -> str:
     return " | ".join(part for part in parts if part)
 
 
@@ -135,6 +139,28 @@ def _format_chunk(hit: dict[str, Any]) -> str:
         hit["content_type"] and f"Type: {hit['content_type']}",
     )
     return f"{header}\n{hit['content']}"
+
+def extract_citations(answer: str, chunk_hits: list[dict]) -> list[dict]:
+    cited_ranks = {
+        int(rank) for rank in re.findall(r"\[C(\d+)\]", answer)
+    }
+
+    citations = []
+
+    for hit in chunk_hits:
+        if hit["rank"] not in cited_ranks:
+            continue
+
+        citations.append({
+            "paper_id": hit["arxiv_id"],
+            "title": hit["title"],
+            "section": " > ".join(hit["breadcrumb"]),
+            "url": f"https://arxiv.org/abs/{hit['arxiv_id']}",
+            "chunk_id": hit["chunk_id"],
+            "citation_label": f"[C{hit['rank']}]",
+        })
+
+    return citations
 
 
 def _papers_section(hits: list[dict[str, Any]]) -> str:
@@ -185,7 +211,7 @@ def fit_to_budget(
     return papers, chunks
 
 
-def check_question(question: str) -> QuestionCheck | None:
+def check_question(question: str) -> Optional[QuestionCheck]:
     """Ask the small model whether the question is usable. None means the check failed."""
     try:
         return (validation_prompt | get_validator_llm().with_structured_output(QuestionCheck)).invoke(
@@ -195,7 +221,7 @@ def check_question(question: str) -> QuestionCheck | None:
         return None
 
 
-def decide_follow_up(inputs: dict) -> FollowUpDecision | None:
+def decide_follow_up(inputs: dict) -> Optional[FollowUpDecision]:
     structured = get_llm().with_structured_output(FollowUpDecision, include_raw=True)
     return (follow_up_prompt | structured).invoke(inputs)["parsed"]
 
@@ -307,14 +333,29 @@ def assemble_context(state: AgentState) -> dict:
 
 def generate_answer(state: AgentState, llm: Runnable) -> dict:
     if not state["context"]:
-        return {"answer": NO_EVIDENCE_ANSWER}
+        return {"answer": NO_EVIDENCE_ANSWER, "citations": []}
+
     try:
-        message = (answer_prompt | llm).invoke({"question": state["query"], "context": state["context"]})
+        message = (answer_prompt | llm).invoke({
+            "question": state["query"],
+            "context": state["context"],
+        })
     except Exception as error:
-        raise GenerationError(f"The LLM couldn't generate an answer: {error}") from error
+        raise GenerationError(
+            f"The LLM couldn't generate an answer: {error}"
+        ) from error
+
     if not message.content.strip():
         raise GenerationError("The LLM returned an empty answer")
-    return {"answer": message.content}
+
+    answer = message.content
+    _, chunk_hits = hits_in_context(state)
+    citations = extract_citations(answer, chunk_hits)
+
+    return {
+        "answer": answer,
+        "citations": citations,
+    }
 
 
 def _papers_for_followup(paper_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -345,7 +386,7 @@ def make_turn(state: AgentState) -> dict[str, Any]:
         "papers": papers,
         "paper_hits": paper_hits,
         "chunk_hits": chunk_hits,
-        "citations": [],
+        "citations": state.get("citations", []),
     }
 
 
@@ -366,7 +407,7 @@ def get_validator_llm() -> ChatOllama:
     return ChatOllama(model=VALIDATION_MODEL, temperature=0)
 
 
-_checkpointer: SqliteSaver | None = None
+_checkpointer: Optional[SqliteSaver] = None
 
 
 def get_checkpointer() -> SqliteSaver:
@@ -394,10 +435,11 @@ def _initial_state(query: str) -> dict[str, Any]:
         "context": "",
         "answer": "",
         "follow_up_suggestions": [],
+        "citations": [],
     }
 
 
-def build_graph(client: QdrantClient, llm: Runnable, checkpointer: SqliteSaver | None = None):
+def build_graph(client: QdrantClient, llm: Runnable, checkpointer: Optional[SqliteSaver] = None):
     """Both searches share one client: local Qdrant allows only one client per storage folder."""
     graph = StateGraph(AgentState)
     graph.add_node("contextualize_query", contextualize_query)
