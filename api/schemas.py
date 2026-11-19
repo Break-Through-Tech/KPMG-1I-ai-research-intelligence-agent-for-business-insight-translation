@@ -25,10 +25,10 @@ class ResearchRequest(BaseModel):
 
 
 class ResearchResponse(BaseModel):
-    """Subset of the existing run_agent result exposed to the frontend."""
+    """The agent's answer and the papers and passages it was given."""
 
-    answer: Optional[str] = None
-    confidence: Optional[str] = None
-    top_score: Optional[float] = None
-    retrieved_chunks: Optional[list[dict[str, Any]]] = None
-    citations: Optional[list[dict[str, Any]]] = None
+    answer: str
+    # arxiv_id, title, abstract, url, rank
+    papers: list[dict[str, Any]] = Field(default_factory=list)
+    # paper_id (arXiv ID), title, section_title, chunk_text, chunk_index, score, url
+    retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)

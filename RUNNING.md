@@ -1,164 +1,174 @@
 # Running the Project
 
-Run all commands from the repository root unless a section says otherwise.
+Everything runs locally: the papers live in a local Qdrant database (`qdrant_data/`), the embedding models run
+in Python, and the LLM runs in Ollama. Run all commands from the repository root.
 
-## 1. Set up Python
+## Requirements
 
-Create and activate a virtual environment:
+- **Python 3.10+** (developed on 3.12)
+- **Node.js 20.19+ or 22.12+** (for the Vite frontend)
+- **[Ollama](https://ollama.com)**
+- About **8 GB of free disk** (the LLM is 4.7 GB, the embedding models about 650 MB) and **16 GB of RAM**
+  recommended; the LLM alone uses 6–8 GB while answering.
+
+## 1. Set up
 
 ```bash
+# Python environment: must be called venv, since the Makefile runs ./venv/bin/python
 python3 -m venv venv
 source venv/bin/activate
-```
-
-Install the project dependencies:
-
-```bash
 pip install -r requirements.txt
-```
 
-Install [Ollama](https://ollama.com) and pull the model the agent uses:
+# Frontend
+cd frontend && npm install && cd ..
 
-```bash
+# LLM
 ollama pull qwen2.5:7b
+ollama pull qwen2.5:1.5b   # question validation before search
 ```
 
-## 2. Load papers into the vector store
+## 2. Load the papers
 
 ```bash
 make ingest
 ```
 
-This looks up every arXiv ID in `data/seen_papers.json` (plus the original PDFs in `data/`) on arXiv and stores one embedding per abstract, tagged with its arXiv ID, in the local `qdrant_data/` database. It takes a few minutes. The first run downloads the `all-MiniLM-L6-v2` embedding model.
+This downloads the 100 papers listed in `data/corpus_ids.txt` from arXiv, splits them into chunks, embeds them and
+stores them in `qdrant_data/`. Expect:
 
-Rerunning it overwrites papers instead of adding duplicates. To start over, delete `qdrant_data/` and run it again.
+- **About an hour.** The first run also downloads the two embedding models. On a Mac, `caffeinate -i make ingest`
+  stops the laptop from sleeping partway.
+- **A few papers skipped** with "No HTML version on arXiv": arXiv hasn't converted them yet. Today 96 of the 100
+  get stored.
 
-Check how many vectors are stored (expect one per paper, about 245):
+It's safe to stop and rerun: papers already stored are skipped, and a paper that failed halfway is redone.
+`make ingest-force` re-ingests everything; deleting `qdrant_data/` starts from scratch.
+
+Check what got stored:
 
 ```bash
-./venv/bin/python -c "from qdrant_client import QdrantClient; c = QdrantClient(path='./qdrant_data'); print(c.count('papers').count); c.close()"
+./venv/bin/python -c "from qdrant_client import QdrantClient; c = QdrantClient(path='./qdrant_data'); print({x.name: c.count(x.name).count for x in c.get_collections().collections}); c.close()"
 ```
 
-Local Qdrant allows one process at a time, so close the agent before running this.
+You should see about 96 points in `papers_high_level` and about 3,600 in `paper_chunks`.
 
-## 3. Ask the agent a question
+## 3. Run the app
+
+Make sure Ollama is running (open the Ollama app, or run `ollama serve`), then:
 
 ```bash
-make agent
+make dev
 ```
 
-At the prompt, enter a research question:
+Open **http://localhost:5173** and ask a question. An answer takes about a minute. `make dev` starts the API on
+port 8000 and the frontend on port 5173; Ctrl+C stops both.
 
-```text
-Enter your research query: How can a system decide which AI model to route a query to when estimating each model's value is expensive?
+What works: asking a question (the search box, suggested questions or the KPMG Focus buttons), the executive
+insight with citation links, the Copy button, the evidence cards with each passage's paper, section, authors
+and date, and View paper (opens the arXiv page in a new tab). Asking again in the same browser tab reuses the
+same conversation thread on the backend (follow-ups about shown papers can skip a new search). Latest AI,
+Trends, the research summary numbers and the other prototype panels are still placeholders.
+
+To run the two servers in separate terminals instead:
+
+```bash
+./venv/bin/python -m uvicorn api.main:app --reload --port 8000   # terminal 1: API
+cd frontend && npm run dev -- --port 5173                        # terminal 2: frontend
 ```
 
-The agent:
+## 4. Use it from the command line
 
-1. Finds the 3 most similar abstracts in Qdrant and puts their arXiv IDs in the LangGraph state.
-2. Fetches each paper's H2 sections from `arxiv.org/html/<arxiv_id>`.
-3. Sends the abstracts and sections to `qwen2.5:7b`, which answers with cited claims.
+```bash
+make agent Q="How does quantization affect the inference speed and accuracy of large language models?"
+make search Q="How should operators plan memory capacity for the KV cache when serving LLMs?"
+```
 
-It prints the answer, the cited paper IDs with supporting quotes, and the 3 retrieved papers, numbered [1] to [3]. A run takes 1 to 3 minutes.
+- `make agent` prints the answer, the papers and passages the LLM was given, and the context size. Without `Q`,
+  type questions one after another; `1`–`3` picks a suggested follow-up; `/new` starts a new thread.
+- `make search` shows the raw search results (top 10 papers, top 20 passages) without calling the LLM.
+  `make search-explain` also shows each passage's rank in the meaning-based and keyword-based searches.
+- Leave out `Q` to type one question after another; a blank line quits.
 
 ### Follow-up questions
 
-After an answer you can keep asking. The agent remembers the last 3 turns and handles a follow-up in one of two ways (logic in `src/followup.py`):
+With the same `thread_id`, the agent remembers the last 3 turns in local `chat_memory.sqlite`:
 
-- **About the papers already shown** ("What are the limitations of paper 2?", "Explain that more simply", "What does this mean for a bank?"): it answers from those papers again, without a new search or arXiv fetch, so it is faster.
-- **Needs different papers** ("What about in healthcare?", "Are there other papers on this topic?", or a new topic): it searches again. If you ask for *other* papers, the ones already shown are left out.
+- **About papers already shown** ("What are the limitations of paper 2?", "Explain that more simply"): reuses that
+  evidence — no new search.
+- **Needs different papers** ("What about in healthcare?", "Are there other papers?"): searches again. Asking for
+  *other* papers excludes ones already shown.
 
-Either way the follow-up is first rewritten into a question that makes sense on its own, and the agent prints it as `(Understood as: ...)` when it changed. References to a shown paper (`paper 2`, `the second paper`, `[2]`, its arXiv ID or title, `these papers`) are recognized without an LLM call; anything else costs one short extra call to `qwen2.5:7b`.
-
-After each answer the agent suggests three follow-ups. Type a number to ask one, `/new` to start a new conversation, or press Enter on an empty line to quit.
-
-From code, pass the previous result's history back in:
+Unclear or off-topic questions are checked with `qwen2.5:1.5b` before search ("Did you mean…?").
 
 ```python
-   first = run_agent("How can hallucination in LLMs be reduced?", thread_id="demo")
-   second = run_agent("What are the limitations of paper 2?", thread_id="demo")
+from src.agent import run_agent
+
+first = run_agent("How can hallucination in LLMs be reduced?", thread_id="demo")
+second = run_agent("What are the limitations of paper 2?", thread_id="demo")
 ```
 
-## 4. Run the tests
+## 5. Run the tests
 
 ```bash
 make test
 ```
 
-The tests run offline: arXiv, the embedding model, and Qdrant are faked or in memory.
+The tests run offline (arXiv, Ollama and Qdrant are faked or in memory), but a few load the real embedding
+models, so run `make ingest` once first.
 
-## 5. Run commands without Make
+## Troubleshooting
 
-The Make targets are shortcuts for these commands:
+| Problem | Cause and fix |
+|---|---|
+| `Storage folder ./qdrant_data is already accessed by another instance of Qdrant client` | Only one process can open `qdrant_data/` at a time. Stop `make dev`, `make agent` or `make search` before running `make ingest`, and the other way round. |
+| The page shows no answer and the API returns **503** | The search failed: `make ingest` hasn't been run, or another process has `qdrant_data/` open. |
+| The API returns **502** | The LLM failed: Ollama isn't running, or `qwen2.5:7b` isn't pulled. |
+| The first answer is slow | The first question loads the embedding models and the LLM, and downloads the Qwen tokenizer from Hugging Face. Later questions take about a minute. |
+| `make dev` says a port is in use | Something is already on port 8000 or 5173, often an earlier `make dev`. Stop it and retry. |
+| `make: ./venv/bin/python: No such file or directory` | The virtual environment isn't at `./venv`. Create it as in section 1, or run with `make PYTHON=python ...`. |
 
-```bash
-./venv/bin/python -m scripts.backfill_papers
-./venv/bin/python -m src.agent
-./venv/bin/python -m pytest tests
-```
+## Reference
 
-## 6. Run the Stage 1 React/FastAPI frontend
+### Make targets
 
-The React frontend is a separate Vite application. Keep the backend and frontend
-running in separate terminals:
+| Target | What it does |
+|---|---|
+| `make ingest` / `make ingest-force` | Store the corpus papers that aren't stored yet / re-store all of them |
+| `make dev` | API (port 8000) and frontend (port 5173) together |
+| `make agent Q="..."` | Answer a question from the command line |
+| `make search Q="..."` / `make search-explain Q="..."` | Show search results without the LLM |
+| `make test` | All tests |
+| `make ui` | Old Streamlit UI; currently broken, use `make dev` |
 
-**Terminal 1 — FastAPI bridge**
+### Research API
 
-```bash
-./venv/bin/python -m uvicorn api.main:app --reload --port 8000
-```
+`POST /api/research` with `{"query": "...", "thread_id": "..."}` returns:
 
-**Terminal 2 — React/Vite frontend**
+- `answer`: Markdown, citing papers as `[Paper Title](https://arxiv.org/abs/<arxiv_id>)`.
+- `papers`: the papers the LLM was given (`arxiv_id`, `title`, `abstract`, `url`, `rank`, `authors`,
+  `publish_date`, `categories`).
+- `retrieved_chunks`: the passages the LLM was given (`paper_id`, `title`, `section_title`, `chunk_text`,
+  `chunk_index`, `score`, `url`, `authors`, `publish_date`, `categories`).
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+Questions are answered one at a time. The same `thread_id` keeps conversation history for follow-ups.
+`GET /api/health` returns `{"status": "ok"}`.
 
-Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
-Vite proxies `/api` requests to FastAPI on port 8000. The existing Streamlit
-fallback remains available with `make ui` on port 8501.
+### Data files
 
-Stage 1 connects only Research → loading → Results to the real backend. Latest
-AI, Trends, KPMG Focus, Paper Workspace, feedback, saving, sharing, and other
-prototype areas are not connected to live backend data yet.
+- `data/corpus_ids.txt`: the papers `make ingest` loads. Add arXiv IDs here and rerun `make ingest` to grow the
+  corpus.
+- `data/seen_papers.json`: every paper the scheduled scraper has found. `./venv/bin/python -m
+  scripts.backfill_papers --all` ingests these instead of the corpus.
+- `qdrant_data/`: the local vector database, generated by `make ingest` and ignored by Git.
+- `chat_memory.sqlite`: local conversation memory per `thread_id`, generated at runtime and ignored by Git.
 
-## Scrape new arXiv papers into the vector store
+### Scheduled scraper
 
-The scraper finds new arXiv papers and stores each paper's abstract in Qdrant,
-tagged with its arXiv ID. The agent fetches a paper's full sections from
-`arxiv.org/html/<arxiv_id>` only when it needs them. No PDFs are downloaded.
+A GitHub Action (Mon/Wed/Fri) runs `python -m scripts.scrape_papers --record-only`, which only adds new arXiv IDs to
+`data/seen_papers.json`; it doesn't touch any vector store. Without `--record-only`, the scraper also ingests the
+new papers the same way `make ingest` does.
 
-```bash
-python3 -m scripts.scrape_papers      # new papers only; safe to re-run
-python3 -m scripts.backfill_papers    # one-off: store papers scraped before this change
-python3 -m unittest tests.test_scrape_papers -v
-```
+### Hosted Qdrant
 
-Stored paper IDs are recorded in `data/seen_papers.json`. Leave `QDRANT_URL` empty
-locally to use `./qdrant_data`.
-
-The scheduled GitHub Action (Mon/Wed/Fri) runs `python -m scripts.scrape_papers --record-only`:
-it only adds new IDs to `data/seen_papers.json` and doesn't add anything to the vector store.
-
-## Local data
-
-- `data/seen_papers.json` lists the arXiv IDs that `make ingest` loads.
-- `qdrant_data/` is the generated local Qdrant database and is ignored by Git.
-- Deleting `qdrant_data/` removes all locally stored vectors and payloads.
-
-If the agent reports that the `papers` collection does not exist, run `make ingest` first.
-
-## Optional: web UI
-
-Start the Streamlit app from the repository root:
-
-```bash
-make ui
-```
-
-Then open the URL it prints (usually http://localhost:8501). The page asks the
-same question flow as `make agent` and shows the answer, cited quotes, retrieved
-papers, and timings. It needs the same setup: `make ingest` and Ollama
-running with `qwen2.5:7b`.
+Leave `QDRANT_URL` unset to use the local `qdrant_data/`. Set `QDRANT_URL` (and `QDRANT_API_KEY` for Qdrant
+Cloud) to use a Qdrant server instead; every command picks it up.

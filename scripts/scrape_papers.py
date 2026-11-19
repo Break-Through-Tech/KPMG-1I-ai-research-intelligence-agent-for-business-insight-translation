@@ -1,19 +1,21 @@
 """
-Scrape new arXiv papers and store their abstracts in the vector store (Qdrant).
+Scrape new arXiv papers and store them in the vector store (Qdrant).
 
 For each new paper:
   1. Get its info from arXiv (title, authors, abstract...) using its arXiv ID.
-  2. Embed the abstract and store it in Qdrant, tagged with the arXiv ID (paper_id).
+  2. Fetch its HTML version from arxiv.org/html/<arxiv_id>, parse it into paragraphs
+     and chunk them (src/arxiv_html.py, src/chunking.py).
+  3. Store the title + abstract in papers_high_level and the chunks in paper_chunks
+     (src/vector_store.py).
 
-Only abstracts are stored. When the agent needs a paper's full sections, it
-fetches them from arxiv.org/html/<paper_id> at answer time (src/arxiv_html.py).
-No PDFs are downloaded or committed to GitHub.
+Papers without an HTML version are skipped and not marked "seen", so they're
+retried on the next run. No PDFs are downloaded or committed to GitHub.
 
 Rescraping is safe to run any number of times:
   - data/seen_papers.json skips papers we've already stored
-  - a paper is only marked "seen" after it was saved successfully,
+  - a paper is only marked "seen" after both collections were written,
     so a paper that failed is retried on the next run
-  - each paper's Qdrant ID is fixed, so storing it again never creates a duplicate
+  - each paper's Qdrant IDs are fixed, so storing it again never creates a duplicate
 
 Run from the repo root:
     python -m scripts.scrape_papers
@@ -71,15 +73,24 @@ def build_paper(result):
         comments=getattr(result, "comment", None),
     )
 
-def ingest_paper(result, vector_client, store=None):
-    """Store one paper's abstract in Qdrant. Returns the Paper."""
-    if store is None:
-        from src.vector_store import generate_and_store_embeddings
-        store = generate_and_store_embeddings
+def ingest_paper(result, vector_client):
+    """Parse, chunk and store one paper. Returns the Paper, or None if arXiv has no HTML
+    version of it yet."""
+    # Imported here so --record-only runs with just arxiv and pydantic installed.
+    from src.arxiv_html import fetch_blocks
+    from src.chunking import chunk_blocks
+    from src.vector_store import store_chunks, store_paper_record
 
     paper = build_paper(result)
-    store(vector_client, paper)
-    print("  Stored abstract in the vector store")
+    blocks = fetch_blocks(paper.paper_id)
+    if blocks is None:
+        print("  No HTML version on arXiv; skipped, will retry next run")
+        return None
+    chunks = chunk_blocks(blocks)
+
+    store_paper_record(vector_client, paper)
+    store_chunks(vector_client, paper, chunks)
+    print(f"  Stored paper record and {len(chunks)} chunks")
     return paper
 
 def _default_vector_client():
@@ -93,7 +104,7 @@ def _default_vector_client():
     return get_client(path=str(VECTOR_STORE_PATH))
 
 
-def scrape_new_papers(vector_client=None, record_only=False, **ingest_kwargs):
+def scrape_new_papers(vector_client=None, record_only=False):
     """record_only=True only adds new IDs to seen_papers.json, without touching Qdrant."""
     if vector_client is None and not record_only:
         vector_client = _default_vector_client()
@@ -107,7 +118,7 @@ def scrape_new_papers(vector_client=None, record_only=False, **ingest_kwargs):
         sort_by=arxiv.SortCriterion.SubmittedDate,
     )
 
-    new_count, failed = 0, []
+    new_count, failed, no_html = 0, [], []
     try:
         for result in client.results(search):
             paper_id = get_paper_id(result)
@@ -119,7 +130,9 @@ def scrape_new_papers(vector_client=None, record_only=False, **ingest_kwargs):
             print(f"New paper: {paper_id} - {result.title.strip()}")
             if not record_only:
                 try:
-                    ingest_paper(result, vector_client, **ingest_kwargs)
+                    if ingest_paper(result, vector_client) is None:
+                        no_html.append(paper_id)
+                        continue
                 except Exception as e:
                     print(f"  FAILED {paper_id}: {e}")
                     failed.append(paper_id)
@@ -134,6 +147,8 @@ def scrape_new_papers(vector_client=None, record_only=False, **ingest_kwargs):
             close()
 
     print(f"Done. {new_count} new paper(s) added.")
+    if no_html:
+        print(f"{len(no_html)} paper(s) have no HTML version yet and will be retried next run: {no_html}")
     if failed:
         print(f"{len(failed)} paper(s) failed and will be retried next run: {failed}")
     return new_count, failed
