@@ -7,6 +7,7 @@
 
 from fastembed import SparseTextEmbedding, TextEmbedding
 from qdrant_client.models import SparseVector
+from typing import Optional
 
 DENSE_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 DENSE_VECTOR_SIZE = 768
@@ -17,8 +18,8 @@ QUERY_PREFIX = "search_query: "
 DENSE_BATCH_SIZE = 8
 SPARSE_MODEL_NAME = "Qdrant/bm25"
 
-_dense_model: TextEmbedding | None = None
-_sparse_model: SparseTextEmbedding | None = None
+_dense_model: Optional[TextEmbedding] = None
+_sparse_model: Optional[SparseTextEmbedding] = None
 
 
 def get_dense_model() -> TextEmbedding:

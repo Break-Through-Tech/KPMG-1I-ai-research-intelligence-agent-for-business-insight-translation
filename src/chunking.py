@@ -14,6 +14,7 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Callable
+from typing import Optional
 
 import pysbd
 
@@ -34,7 +35,7 @@ _ABBREVIATION_END = re.compile(
 _MATH = re.compile(r"\$\$.*?\$\$|\$[^$]*\$")
 _MATH_PLACEHOLDER = re.compile(r"MATHSPAN(\d+)X")
 
-_segmenter: pysbd.Segmenter | None = None
+_segmenter: Optional[pysbd.Segmenter] = None
 
 
 @dataclass
@@ -152,7 +153,7 @@ def _pack_section(sentences: list[_Sentence], target_tokens: int, max_tokens: in
 
 def _join(sentences: list[_Sentence]) -> str:
     parts = [sentences[0].text]
-    for previous, sentence in itertools.pairwise(sentences):
+    for previous, sentence in zip(sentences, sentences[1:]):
         if sentence.block is not previous.block:
             parts.append("\n\n")
         elif sentence.line != previous.line:
@@ -174,7 +175,7 @@ def _common_prefix(breadcrumbs: list[list[str]]) -> list[str]:
 
 def chunk_blocks(
     blocks: list[TextBlock],
-    count_tokens: Callable[[str], int] | None = None,
+    count_tokens: Optional[Callable[[str], int]] = None,
     target_tokens: int = TARGET_TOKENS,
     max_tokens: int = MAX_TOKENS,
     overlap_tokens: int = OVERLAP_TOKENS,
