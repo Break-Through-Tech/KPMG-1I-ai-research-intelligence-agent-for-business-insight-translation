@@ -205,6 +205,7 @@ type Paper = Omit<(typeof papers)[number], "relevance"> & {
   relevance?: number;
   rank?: number;
   arxivId?: string;
+  passages?: string[];
 };
 
 function formatAuthors(authors?: string[]): string {
@@ -224,24 +225,32 @@ function formatDate(isoDate?: string | null): string {
 }
 
 function papersFromResearch(data: ResearchResponse | null): Paper[] {
-  const chunks = data?.retrieved_chunks;
-  if (!chunks?.length) return papers;
-
-  // The API returns the passages in search order, and the ones given to the LLM are always the top-ranked ones.
-  return chunks.map((chunk, index) => {
-    const citation = data?.citations?.find((item) => item.paper_id === chunk.paper_id);
-    return {
-      title: chunk.title || "Research source",
-      authors: formatAuthors(chunk.authors),
-      date: formatDate(chunk.publish_date),
-      source: chunk.paper_id || "Research source",
-      category: chunk.section_title || "Research source",
-      rank: index + 1,
-      arxivId: chunk.paper_id,
-      abstract: chunk.chunk_text || "",
-      quote: citation?.supporting_quote || chunk.chunk_text || "",
-    };
-  });
+  // Before any search, show the sample papers. After a search, only show papers the AI was given.
+  if (!data) return papers;
+  const result: Paper[] = [];
+  for (const paper of data.papers ?? []) {
+    // The best-matching passage from this paper, if there is one.
+    let bestChunk = undefined;
+    const passages: string[] = [];
+    for (const chunk of data.retrieved_chunks ?? []) {
+      if (chunk.paper_id !== paper.arxiv_id) continue;
+      if (chunk.chunk_text) passages.push(chunk.chunk_text);
+      if (!bestChunk || (chunk.score ?? 0) > (bestChunk.score ?? 0)) bestChunk = chunk;
+    }
+    result.push({
+      title: paper.title,
+      authors: formatAuthors(paper.authors),
+      date: formatDate(paper.publish_date),
+      source: paper.arxiv_id,
+      category: paper.categories?.[0] || "Research paper",
+      rank: paper.rank,
+      arxivId: paper.arxiv_id,
+      abstract: paper.abstract,
+      quote: bestChunk?.chunk_text || paper.abstract,
+      passages,
+    });
+  }
+  return result;
 }
 
 const nav = [
@@ -721,7 +730,7 @@ function PaperCard({
   compact = false,
 }: {
   paper: Paper;
-  openPaper: () => void;
+  openPaper: (paper?: Paper) => void;
   compact?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -747,7 +756,7 @@ function PaperCard({
               </div>
             )}
           </div>
-          <h3 onClick={openPaper}>{paper.title}</h3>
+          <h3 onClick={() => openPaper(paper)}>{paper.title}</h3>
           <p className="paper-meta">
             {paper.authors} <span /> {paper.date} <span /> {paper.source}
           </p>
@@ -794,11 +803,7 @@ function PaperCard({
           </button>
           <button
             className="secondary-button"
-            onClick={
-              paper.arxivId
-                ? () => window.open(`https://arxiv.org/abs/${paper.arxivId}`, "_blank", "noopener,noreferrer")
-                : openPaper
-            }
+            onClick={() => openPaper(paper)}
           >
             {compact ? "Preview" : "View paper"}
             <Icon name="external" size={14} />
@@ -818,11 +823,15 @@ function Results({
   query: string;
   data: ResearchResponse | null;
   back: () => void;
-  openPaper: () => void;
+  openPaper: (paper?: Paper) => void;
 }) {
   const resultPapers = papersFromResearch(data);
-  const selectedSourceCount = data?.retrieved_chunks?.length ?? papers.length;
-  const topRelevance = data?.top_score != null ? Math.round(data.top_score * 100) : 92;
+  const selectedSourceCount = data ? (data.papers?.length ?? 0) : papers.length;
+  let topScore = 0;
+  for (const chunk of data?.retrieved_chunks ?? []) {
+    if ((chunk.score ?? 0) > topScore) topScore = chunk.score ?? 0;
+  }
+  const topRelevance = Math.round(topScore * 100);
   const answerRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
@@ -1297,6 +1306,51 @@ function Focus({ research }: { research: (q: string) => void }) {
   );
 }
 
+function RealPaperView({ paper, back }: { paper: Paper; back: () => void }) {
+  return (
+    <main className="paper-workspace">
+      <div className="workspace-toolbar">
+        <button className="back-link" onClick={back}>
+          <Icon name="back" size={16} />
+          Back to evidence
+        </button>
+        <div className="workspace-actions">
+          <button
+            onClick={() =>
+              window.open(`https://arxiv.org/abs/${paper.arxivId}`, "_blank", "noopener,noreferrer")
+            }
+          >
+            <Icon name="external" size={15} />
+            Open on arXiv
+          </button>
+        </div>
+      </div>
+      <div className="document-scroll">
+        <article className="paper-document">
+          <div className="doc-journal">ARXIV · {paper.arxivId}</div>
+          <h1>{paper.title}</h1>
+          <div className="doc-authors">{paper.authors}</div>
+          <div className="doc-meta">
+            <span>
+              {paper.category} · {paper.date}
+            </span>
+          </div>
+          <h2>Abstract</h2>
+          <p>{paper.abstract}</p>
+          {(paper.passages?.length ?? 0) > 0 && (
+            <>
+              <h2>Passages used in the answer</h2>
+              {paper.passages!.map((text, i) => (
+                <blockquote key={i}>{text}</blockquote>
+              ))}
+            </>
+          )}
+        </article>
+      </div>
+    </main>
+  );
+}
+
 function PaperWorkspace({ back }: { back: () => void }) {
   const [selected, setSelected] = useState(true);
   const [selectedPage, setSelectedPage] = useState(1);
@@ -1539,6 +1593,7 @@ export default function App() {
   const [researchData, setResearchData] = useState<ResearchResponse | null>(null);
   const [threadId] = useState(() => crypto.randomUUID());
   const [previousView, setPreviousView] = useState<View>("results");
+  const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
   }, [dark]);
@@ -1560,7 +1615,8 @@ const research = async (q: string) => {
     setProgress(false);
   }
 };
-  const openPaper = () => {
+  const openPaper = (paper?: Paper) => {
+    setSelectedPaper(paper ?? null);
     setPreviousView(view);
     setView("paper");
   };
@@ -1596,7 +1652,12 @@ const research = async (q: string) => {
         {view === "latest" && <Latest openPaper={openPaper} />}
         {view === "trends" && <Trends />}
         {view === "focus" && <Focus research={research} />}
-        {view === "paper" && <PaperWorkspace back={() => setView(previousView)} />}
+        {view === "paper" &&
+          (selectedPaper?.arxivId ? (
+            <RealPaperView paper={selectedPaper} back={() => setView(previousView)} />
+          ) : (
+            <PaperWorkspace back={() => setView(previousView)} />
+          ))}
       </div>
     </div>
   );
