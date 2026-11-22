@@ -3,8 +3,9 @@
 import threading
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from api.auth import require_kpmg_user
 from api.schemas import ResearchRequest, ResearchResponse
 
 router = APIRouter()
@@ -37,13 +38,17 @@ def _metadata(hit: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/api/research", response_model=ResearchResponse, response_model_exclude_none=True)
-def research(request: ResearchRequest) -> ResearchResponse:
+def research(
+    request: ResearchRequest, user: dict[str, Any] = Depends(require_kpmg_user)
+) -> ResearchResponse:
     # thread_id keeps conversation history across questions; focus_areas are accepted but unused.
     from src.agent import GenerationError
     from src.retrieval import RetrievalError
 
     try:
-        state = run_agent(request.query, thread_id=request.thread_id)
+        # Prefix with the user's id so one user can never read or continue another user's conversation.
+        thread_id = f"{user['uid']}:{request.thread_id}" if request.thread_id else None
+        state = run_agent(request.query, thread_id=thread_id)
     except RetrievalError as error:
         raise HTTPException(status_code=503, detail="The paper search failed. Is the vector store loaded?") from error
     except GenerationError as error:

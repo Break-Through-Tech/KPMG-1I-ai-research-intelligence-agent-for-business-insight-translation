@@ -3,6 +3,8 @@ import kpmgBlueLogo from "./assets/kpmg-logo-blue.svg";
 import kpmgWhiteLogo from "./assets/kpmg-logo-white.svg";
 import Markdown from "react-markdown";
 import { runResearch, type ResearchResponse } from "./api/research";
+import { signOut } from "firebase/auth";
+import { fbAuth } from "./firebase";
 
 type View = "home" | "results" | "latest" | "trends" | "focus" | "paper";
 type Vote = "up" | "down" | null;
@@ -390,12 +392,9 @@ function Topbar({
         >
           <Icon name={dark ? "sun" : "moon"} />
         </button>
-        {/* No user accounts yet.
-        <button className="profile-control" title="Account">
-          <span>AC</span>
-          <Icon name="down" size={13} />
+                <button className="model-select" onClick={() => signOut(fbAuth)}>
+          Sign out
         </button>
-        */}
       </div>
     </header>
   );
@@ -812,11 +811,13 @@ function PaperCard({
 function Results({
   query,
   data,
+  error,
   back,
   openPaper,
 }: {
   query: string;
   data: ResearchResponse | null;
+  error?: string | null;
   back: () => void;
   openPaper: () => void;
 }) {
@@ -900,7 +901,7 @@ function Results({
                 </Markdown>
               </div>
             ) : (
-              <p>No research answer was returned.</p>
+              <p>{error ?? "No research answer was returned."}</p>
             )}
             <div className="takeaways">
               <h3>Key takeaways</h3>
@@ -920,9 +921,11 @@ function Results({
             </div>
             <div className="confidence-row">
               <div>
-                <span className="confidence-badge">
-                  <i /> {data?.confidence}
-                </span>
+                {data?.confidence && (
+                  <span className="confidence-badge">
+                    <i /> {data.confidence}
+                  </span>
+                )}
                 <span>Based on {selectedSourceCount} selected sources</span>
               </div>
               <div>
@@ -1537,6 +1540,7 @@ export default function App() {
   const [query, setQuery] = useState(suggestions[1]);
   const [progress, setProgress] = useState(false);
   const [researchData, setResearchData] = useState<ResearchResponse | null>(null);
+  const [researchError, setResearchError] = useState<string | null>(null);
   const [threadId] = useState(() => crypto.randomUUID());
   const [previousView, setPreviousView] = useState<View>("results");
   useEffect(() => {
@@ -1549,6 +1553,7 @@ const research = async (q: string) => {
   setQuery(q);
   setProgress(true);
   setResearchData(null);
+  setResearchError(null);
   setView("results");
 
   try {
@@ -1556,6 +1561,7 @@ const research = async (q: string) => {
     setResearchData(data);
   } catch (error) {
     console.error("Research request failed:", error);
+    setResearchError(error instanceof Error ? error.message : "Research request failed.");
   } finally {
     setProgress(false);
   }
@@ -1590,6 +1596,7 @@ const research = async (q: string) => {
             <Results 
             query={query}
             data={researchData} 
+            error={researchError}
             back={() => setView("home")} 
             openPaper={openPaper} />
           ))}
